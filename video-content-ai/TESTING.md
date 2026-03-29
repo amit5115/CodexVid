@@ -63,7 +63,7 @@ Covers the core HTTP surface of the FastAPI app.
 | `test_index_serves_learn_html` | `GET /` serves `learn.html` with CodexVid branding in body |
 | `test_learn_serves_learn_html` | `GET /learn` serves same `learn.html` |
 
-**Note:** `POST /api/workspace/generate` must return **404** (legacy removed). This is verified implicitly by the routing tests.
+**Note:** There is no workspace API, ChromaDB, or scoring pipeline in this build — only the CodexVid routes listed above.
 
 **Mocking pattern:**
 ```python

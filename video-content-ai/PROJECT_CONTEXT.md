@@ -89,14 +89,13 @@ video-content-ai/
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── transcription.py        Whisper model cache, audio splitting, language parsing
-│   │   ├── video.py                FFmpeg audio extraction, yt-dlp download, video metadata
+│   │   ├── video.py                yt-dlp download + normalize_media_source (5 functions only)
 │   │   └── aws_transcribe.py       S3 upload, Transcribe job lifecycle, JSON parsing
 │   │
 │   └── static/
 │       ├── learn.html              Three-screen SPA: upload → processing → workspace
 │       ├── learn.js                Upload handler, chat, rendering, video seek (vanilla JS)
-│       ├── learn.css               Dark theme, animations, responsive layout
-│       └── index.html              Landing page (currently unused)
+│       └── learn.css               Dark theme, animations, responsive layout
 │
 ├── tests/
 │   ├── __init__.py
@@ -147,15 +146,16 @@ video-content-ai/
 ## Key Architectural Decisions
 
 1. **No database** — all session state stored as JSON + FAISS on disk; sessions identified by UUID
-2. **Semantic chunking** — chunks follow sentence boundaries at 30–60s; never splits mid-sentence
-3. **Sentence-level timestamps** — chat responses refined beyond chunk granularity to best-matching sentence
-4. **Two-stage chat** — extract first (no summarization), then explain; prevents hallucination
-5. **Per-chunk teaching** — one LLM call per 30–60s chunk, parallelized; avoids full-transcript token overflow
-6. **Pluggable LLM** — swap backends by changing `VCAI_LLM_PROVIDER`; same interface for all
-7. **FAISS cosine via normalization** — `IndexFlatIP` on L2-normalized vectors = exact cosine similarity
-8. **Overlapping audio windows** — 5s overlap reduces Whisper boundary word drops
-9. **Grounding check** — token overlap between answer and transcript; low confidence → safe fallback
-10. **Thread pool for blocking I/O** — Whisper and LLM calls run in `ThreadPoolExecutor` so FastAPI event loop stays responsive
+2. **Semantic chunking** — chunks follow sentence boundaries at 30–60s; never splits mid-sentence; time-based fallback guarantees multiple chunks even when Whisper word timestamps are sparse
+3. **Forced sentence breaks** — `words_to_sentence_spans` forces a new sentence every 45 s to prevent one mega-sentence collapsing the entire transcript into a single chunk
+4. **Sentence-level timestamps** — chat responses refined beyond chunk granularity to best-matching sentence
+5. **Two-stage chat** — extract first (no summarization), then explain; prevents hallucination
+6. **Per-chunk teaching** — one LLM call per 30–60s chunk, parallelized; prompt forbids whole-video summaries; post-response phrase detection substitutes raw snippet if LLM ignores the constraint
+7. **Pluggable LLM** — swap backends by changing `VCAI_LLM_PROVIDER`; same interface for all
+8. **FAISS cosine via normalization** — `IndexFlatIP` on L2-normalized vectors = exact cosine similarity
+9. **Overlapping audio windows** — 5s overlap reduces Whisper boundary word drops
+10. **Grounding check** — token overlap between answer and transcript; low confidence → safe fallback
+11. **Thread pool for blocking I/O** — Whisper and LLM calls run in `ThreadPoolExecutor` so FastAPI event loop stays responsive
 
 ---
 

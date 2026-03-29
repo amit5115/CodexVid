@@ -13,13 +13,6 @@ if TYPE_CHECKING:
     from app.codexvid.vector_store import CodexvidVectorStore
 
 
-def build_vector_store(*args, **kwargs):
-    """Lazy import so environments without ``faiss`` can still use chunking/transcription."""
-    from app.codexvid.vector_store import build_vector_store as _build
-
-    return _build(*args, **kwargs)
-
-
 def __getattr__(name: str):
     if name == "CodexvidVectorStore":
         from app.codexvid.vector_store import CodexvidVectorStore as _T
@@ -29,7 +22,6 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "build_vector_store",
     "chat",
     "create_chunks",
     "detect_mode",
