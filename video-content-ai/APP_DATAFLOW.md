@@ -1,85 +1,449 @@
-# App data flow
+# App Data Flow (CodexVid AI)
 
-This document describes how data moves through **CodexVid AI** for sessions: upload → transcribe → sentence timeline → semantic chunk → embed (FAISS) → sentence-refined chat + teaching pack.
-
-## 1. Upload
-
-1. Client sends `POST /api/codexvid/upload` with multipart field `file` (video) or a YouTube URL.
-2. API saves or downloads the file and returns `session_id`, counts, and the teaching pack.
-3. Processing runs in a thread-pool executor during the request: extract audio, run STT, write `transcript.json` (`segments` + `sentences`), semantic chunk, index, generate teaching JSON (sentence-based digest + snap when sentences exist).
-
-## 2. Transcription (STT)
-
-- **Local (`VCAI_STT_PROVIDER=whisper` or unset):** `faster-whisper` with **word-level timestamps** where available; overlapping audio windows use `VCAI_CODEXVID_CHUNK_SEC`, `VCAI_CODEXVID_AUDIO_OVERLAP_SEC`, and `VCAI_CODEXVID_PARALLEL_WORKERS`. Fine segments (`VCAI_CODEXVID_FINE_SEG_*`) group words into short spans with per-word `start`/`end`.
-- **AWS (`VCAI_STT_PROVIDER=aws`):** audio is uploaded to S3, **AWS Transcribe** runs a batch job, result is polled and parsed into segments (normalized to the same chunking-friendly shape where possible).
-
-Output segments include **`text`**, **`start`**, **`end`**, and usually **`words`** (each word: `word`, `start`, `end`). Timestamp alignment uses **no lead-in pad** so times match **`HTMLMediaElement.currentTime`** for seeking.
-
-## 3. Sentence timeline
-
-**`app/codexvid/timestamp_utils.py`** flattens words from all segments, groups them into **sentence spans** (punctuation-based), and can emit a full **`transcript_sentence_timeline`**.
-
-**`transcript.json`** on disk is an object:
-
-```json
-{
-  "segments": [ { "text", "start", "end", "words": [ ... ] } ],
-  "sentences": [ { "text", "start", "end" } ]
-}
-```
-
-## 4. Semantic chunking
-
-**`app/codexvid/chunking.py`** no longer uses fixed word windows with overlap. It:
-
-1. Builds sentences from word timings.
-2. Packs sentences into chunks of roughly **`VCAI_CODEXVID_SEM_CHUNK_MIN_SEC`–`VCAI_CODEXVID_SEM_CHUNK_MAX_SEC`** (default **30–60** seconds), respecting sentence boundaries and splitting overly long spans at word timings.
-
-Each chunk has **`text`**, **`start_time`**, **`end_time`** (float seconds), and **`start`/`end`** aliases for compatibility.
-
-## 5. Embeddings + FAISS
-
-Each chunk’s **text** is embedded; metadata stores **`start_time`**, **`end_time`**, plus **`start`/`end`** mirrors. Vectors live per session under `data/codexvid_sessions/<session_id>/` (see `app/codexvid/vector_store.py`).
-
-## 6. Chat (RAG + sentence timestamps + multi-stage LLM)
-
-1. Client sends `POST /api/codexvid/chat` with `session_id`, `query`, and optional `model` / `mode`. The handler passes **`session_id`** into the chat pipeline so **`transcript.json`** can be loaded from the session directory.
-
-2. **Layer 1 — chunk retrieval (unchanged):** FAISS search returns the **top‑k** chunks only (`VCAI_CODEXVID_RAG_TOP_K`, default **3**). The full transcript is **not** sent to the LLM.
-
-3. **Layer 2 — sentence pick (`app/codexvid/retrieval_utils.py`):**
-   - Load **`sentences`** from `transcript.json` (or rebuild from `segments` / legacy list via `transcript_sentence_timeline`).
-   - Keep sentences whose time range **overlaps** any retrieved chunk.
-   - **One batched embedding call:** `[query] + [each candidate sentence text]` using `VCAI_EMBEDDING_MODEL` (same embedding path as FAISS indexing).
-   - **Cosine similarity** picks the **single best** sentence; **`timestamp_start`** / **`timestamp_end`** in the API become that sentence’s **`start`** / **`end`**. If no sentences or embedding fails, timestamps fall back to the **chunk union**.
-
-4. **Stage 1 — extraction:** Prompt asks for **all** relevant points from the retrieved chunk text **without** stripping technical detail (not a summary).
-
-5. **Stage 2 — explanation:** Strict teacher system prompt; model returns **JSON** with `answer`, `timestamp_start`, `timestamp_end`, `key_points` using the **refined** sentence times (or chunk fallback). The prompt labels whether the span is **sentence-level** or **chunk-level**.
-
-6. **Validation:** A **grounding score** checks that substantive answer tokens appear in the transcript excerpt; low confidence yields a safe fallback string (`Not clearly explained in this segment`).
-
-**Example JSON fields in the HTTP response** (see OpenAPI): `answer`, `timestamps`, `timestamp_start`, `timestamp_end`, `key_points`, `grounded`, `grounding_score`, `mode`, `chunks_used`.
-
-## 7. Teaching pack (post-upload)
-
-- **`generate_teaching_output`** runs **one LLM call per semantic chunk** (no full-transcript chapter pass). Each call returns JSON: `topic_title`, `description`, and chunk **`start_time`/`end_time`** (enforced from the chunk for exact alignment).
-- Results are **aggregated** in time order, **merge_adjacent_topics** merges only **consecutive** segments whose titles are highly similar (`difflib` ratio ≥ 0.90; stricter pass or no-merge if a long video would drop below ~5 topics).
-- **`enforce_coverage`** extends the first/last topic to the full chunk timeline so timestamps span the video.
-- Optional **`sentences`**: **`snap_chapter_times_to_sentences`** snaps chapter **`start`/`end`** to sentence boundaries for the Lesson tab.
-- A **second** LLM call (summaries only) produces **`key_takeaways`** and **`quiz`** from the topic list—not the raw transcript.
-- Response includes **`topics`** (structured list) and **`chapters`** (same content shaped for the existing UI).
-
-## 8. Status and cleanup
-
-- **Exists:** `GET /api/codexvid/sessions/{id}/exists` checks for an index file.
-- **Video:** `GET /api/codexvid/sessions/{id}/video` streams the stored source copy.
-
-## 9. Health
-
-- **`GET /health`** — process up.
-- **`GET /ready`** — checks LLM availability (`list_models` on the configured provider); does not require a database.
+This document describes exactly how data moves through the application for every major operation. Start here to understand what happens step by step when a user uploads a video, asks a question, or receives the teaching pack.
 
 ---
 
-For UI steps, see [UI_CLICK_GUIDE.md](./UI_CLICK_GUIDE.md). For code structure, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+## 1. Upload Flow
+
+### 1.1 Client Request
+
+The browser (`learn.js`) sends:
+
+```
+POST /api/codexvid/upload
+Content-Type: multipart/form-data
+
+file: <binary video data>         (or omit and send youtube_url)
+youtube_url: "https://..."        (or omit and send file)
+model: "llama3"
+whisper_model: "base"
+language: "en"
+```
+
+### 1.2 FastAPI Handler (`app/api/codexvid.py`)
+
+1. Validates: exactly one of `file` or `youtube_url` must be present; `youtube_url` must be a real YouTube URL if provided
+2. If YouTube URL: calls `download_video(url, tmpdir)` via `app/services/video.py` (yt-dlp) → local MP4 path
+3. If file upload: writes bytes to a temp file
+4. Calls `process_upload(video_path, whisper_model, language, model)` in a `ThreadPoolExecutor` (keeps async FastAPI non-blocking)
+5. Returns `session_id`, `segment_count`, `chunk_count`, `teaching`, `source`, `youtube_url`
+
+### 1.3 `process_upload()` (`app/codexvid/session.py`)
+
+Full pipeline executed synchronously in the thread pool:
+
+```
+video_path (MP4 or other)
+    │
+    ├─[1] new_session_dir() → UUID session_id + disk path
+    │
+    ├─[2] Copy video → {session_dir}/source.mp4
+    │
+    ├─[3] transcribe_video(source.mp4, ...) → segments
+    │         └── extract_audio_wav() via FFmpeg (16 kHz mono WAV)
+    │         └── _split_audio() → overlapping windows
+    │         └── parallel _transcribe_one_chunk() × N workers
+    │         └── merge_segments() + deduplicate_overlapping_words()
+    │         └── returns: list[{text, start, end, words:[{word,start,end}]}]
+    │
+    ├─[4] transcript_sentence_timeline(segments) → sentence list
+    │
+    ├─[5] Save transcript.json → {segments: [...], sentences: [...]}
+    │
+    ├─[6] create_chunks(segments) → semantic_chunks
+    │         └── flatten_words_from_transcript()
+    │         └── words_to_sentence_spans()
+    │         └── greedy pack into 30–60s windows
+    │         └── split oversized sentences at word boundaries
+    │         └── returns: list[{text, start_time, end_time, start, end}]
+    │
+    ├─[7] Save chunks.json
+    │
+    ├─[8] CodexvidVectorStore.build(chunks, session_dir, embed_fn)
+    │         └── batch embed all chunk texts (VCAI_EMBEDDING_MODEL)
+    │         └── L2-normalize vectors
+    │         └── faiss.IndexFlatIP.add(normalized_vectors)
+    │         └── Save faiss.index + faiss_meta.json
+    │
+    ├─[9] generate_teaching_output(chunks, sentences, model, workers)
+    │         └── parallel LLM call per chunk (VCAI_CODEXVID_TEACHING_CHUNK_WORKERS)
+    │         └── merge_adjacent_topics() (title similarity ≥ 0.90)
+    │         └── enforce_coverage() (extend first/last to video bounds)
+    │         └── snap_chapter_times_to_sentences() (if sentences available)
+    │         └── second LLM call: takeaways + quiz from topic summaries
+    │
+    └─[10] Save teaching.json
+           Return: (session_id, {segment_count, chunk_count, teaching})
+```
+
+### 1.4 Client Response Handling
+
+`learn.js` receives the JSON response and:
+1. Stores `session_id` in global `sessionId`
+2. Calls `renderTeaching(payload.teaching)` → populates the Lesson tab
+3. Sets `<video src>` to `/api/codexvid/sessions/{sessionId}/video`
+4. Switches from the Processing screen to the Workspace screen
+
+---
+
+## 2. Transcription Detail
+
+### 2.1 Local Whisper (`VCAI_STT_PROVIDER=whisper` or unset)
+
+```
+source.mp4
+    │
+    ▼ FFmpeg
+16kHz mono WAV
+    │
+    ▼ _split_audio(chunk_duration=25s, overlap=5s)
+[window_0: 0–25s], [window_1: 20–45s], [window_2: 40–65s], ...
+                    ↑ step = chunk_duration - overlap = 20s
+    │
+    ▼ parallel faster-whisper (N workers)
+per-window segments with word-level timestamps
+    │
+    ▼ merge_segments() + deduplicate_overlapping_words()
+unified segment list, no duplicate words in overlap regions
+    │
+    ▼ return
+list[{text, start, end, words:[{word, start, end}]}]
+```
+
+**Why overlapping windows?** Whisper sometimes drops the first/last words in a clip. The 5-second overlap ensures boundary words are captured by at least one window.
+
+**Word deduplication:** Words from overlapping regions are de-duplicated by comparing `start` timestamps. The word with the more accurate (earlier window's) timestamp is kept.
+
+### 2.2 AWS Transcribe (`VCAI_STT_PROVIDER=aws`)
+
+```
+source.mp4 audio track
+    │
+    ▼ boto3 S3 upload → s3://{BUCKET}/{key}.wav
+    │
+    ▼ transcribe_client.start_transcription_job(...)
+Job ID returned
+    │
+    ▼ poll every N seconds until COMPLETED or FAILED (timeout: 3600s)
+    │
+    ▼ download Transcribe JSON from S3
+    │
+    ▼ parse_transcript_json_to_segments()
+Normalize to Whisper-compatible format: {text, start, end, words:[...]}
+```
+
+AWS language mapping: short codes like `en` → `en-US`, `es` → `es-US`. `auto` → `IdentifyLanguage=True`.
+
+---
+
+## 3. Sentence Timeline Construction
+
+### Module: `app/codexvid/timestamp_utils.py`
+
+```
+segments: [{text, start, end, words:[{word, start, end}]}]
+    │
+    ▼ flatten_words_from_transcript()
+flat_words: [{word, start, end}, ...]
+    (if words missing from segment: linear interpolate timestamps)
+    │
+    ▼ deduplicate_overlapping_words()
+    (remove words with duplicate start times from overlapping windows)
+    │
+    ▼ words_to_sentence_spans()
+    (group words into sentences by punctuation: . ? ! ; \n)
+sentences: [{text, start, end, words:[...]}, ...]
+    │
+    ▼ transcript_sentence_timeline()
+sentences without word-level detail: [{text, start, end}, ...]
+```
+
+**Saved to `transcript.json`:**
+```json
+{
+  "segments": [... all segments with words ...],
+  "sentences": [... sentences without word lists ...]
+}
+```
+
+---
+
+## 4. Semantic Chunking
+
+### Module: `app/codexvid/chunking.py`
+
+```
+segments (with word timestamps)
+    │
+    ▼ Build sentences (via timestamp_utils)
+[s1: 0–3.2s], [s2: 3.5–7.1s], [s3: 7.4–12.0s], ...
+    │
+    ▼ Greedy sentence packing:
+
+    chunk_start = s1.start
+    current_duration = 0
+
+    while sentences remain:
+        add next sentence → current_duration increases
+        if current_duration >= SEM_CHUNK_MAX_SEC:
+            → flush current chunk, start new
+        elif current_duration >= SEM_CHUNK_MIN_SEC:
+            → check: would next sentence push over max?
+            → if yes: flush; if no: keep adding
+    │
+    ▼ Handle oversized single sentences:
+    (split at word boundaries when one sentence > SEM_CHUNK_MAX_SEC)
+    │
+    ▼ return
+chunks: [{text, start_time, end_time, start, end}, ...]
+```
+
+Each chunk is roughly 30–60 seconds and always ends at a sentence boundary (never mid-sentence).
+
+---
+
+## 5. FAISS Index Construction
+
+### Module: `app/codexvid/vector_store.py`
+
+```
+chunks: [{text, start_time, end_time}, ...]
+    │
+    ▼ batch embed all texts
+    get_provider().embed(model=VCAI_EMBEDDING_MODEL, texts=[chunk.text for chunk in chunks])
+    → np.ndarray shape (N, D)  where D = embedding dimension (e.g. 768)
+    │
+    ▼ L2-normalize each vector
+    vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+    → cosine similarity via inner product
+    │
+    ▼ faiss.IndexFlatIP(D)
+    index.add(normalized_vectors)
+    │
+    ▼ save to disk:
+    faiss.write_index(index, "{session_dir}/faiss.index")
+    json.dump({"dim": D, "meta": [...]}, "{session_dir}/faiss_meta.json")
+```
+
+**Why `IndexFlatIP`?** Flat (brute-force) index gives exact nearest neighbors. After L2 normalization, inner product equals cosine similarity. For typical video lengths (< 100 chunks), exact search is fast enough.
+
+---
+
+## 6. Chat Flow
+
+### 6.1 Client Request
+
+```
+POST /api/codexvid/chat
+Content-Type: application/json
+
+{
+  "session_id": "abc123...",
+  "query": "What is gradient descent?",
+  "model": "llama3",
+  "mode": "simple"
+}
+```
+
+### 6.2 FastAPI Handler
+
+1. Calls `load_store(session_id)` → loads `faiss.index` + `faiss_meta.json`
+2. Calls `store.search(query, k=RAG_TOP_K)` → top-k chunks with scores
+3. Calls `chat(query, retrieved_chunks, model, mode, session_id)` in thread pool
+
+### 6.3 `chat()` Pipeline (`app/codexvid/chat.py`)
+
+```
+query: "What is gradient descent?"
+retrieved_chunks: [{text, start_time, end_time}, ...]   (top-k from FAISS)
+session_id: "abc123..."
+    │
+    ├─[Layer 1] FAISS already done (passed in)
+    │
+    ├─[Layer 2] Sentence-level timestamp refinement:
+    │    load_session_sentences(session_id)
+    │    → read transcript.json → sentences list
+    │    │
+    │    filter_sentences_overlapping_chunks(sentences, chunks)
+    │    → keep sentences where [start,end] overlaps any chunk's [start_time,end_time]
+    │    │
+    │    find_most_relevant_sentence(query, candidate_sentences, embed_model)
+    │    → ONE batch embed call: [query] + [sentence.text for each candidate]
+    │    → cosine_similarity_matrix(query_vec, sentence_matrix)
+    │    → return sentence with highest score
+    │    │
+    │    timestamp_start = best_sentence.start
+    │    timestamp_end   = best_sentence.end
+    │    (fallback: union of all retrieved chunks if no sentences or embed fails)
+    │
+    ├─[Stage 1] Extraction:
+    │    system: "You are a precise information extractor."
+    │    user:   "Extract ALL important points from this transcript: {chunks_text}"
+    │    → LLM returns bullet list (no summarization, no detail loss)
+    │    │
+    │    if extraction is empty or "not mentioned":
+    │        return early: "This topic is not covered in the video."
+    │
+    ├─[Stage 2] Explanation:
+    │    system: "You are a teacher. {mode-specific style instructions}"
+    │    user:   "Explain: {extraction}\n\nTimestamp (sentence-level): {start}–{end}\n\nReturn JSON."
+    │    → LLM returns:
+    │       {
+    │         "answer": "Detailed explanation...",
+    │         "timestamp_start": 12.345,
+    │         "timestamp_end": 45.678,
+    │         "key_points": ["point 1", "point 2"]
+    │       }
+    │
+    ├─[Validation] Grounding check:
+    │    answer_tokens = [t for t in answer.split() if len(t) >= 4]
+    │    transcript_tokens = set(chunks_text.lower().split())
+    │    grounding_score = |answer_tokens ∩ transcript_tokens| / |answer_tokens|
+    │    if grounding_score < 0.38 and len(answer_tokens) >= 6:
+    │        answer = "Not clearly explained in this segment."
+    │
+    └─[Return]
+       {
+         answer, timestamp_start, timestamp_end,
+         key_points, grounded, grounding_score,
+         mode, chunks_used, timestamps: [{start_label, end_label, start_sec, end_sec}]
+       }
+```
+
+### 6.4 Client Response Handling
+
+```javascript
+result = await fetch('/api/codexvid/chat', ...).json()
+
+// Append to chat log
+appendAssistantMessage(result.answer, result.mode, {
+  timestamp_start: result.timestamp_start,
+  key_points: result.key_points,
+})
+
+// Jump video to relevant sentence
+if (result.chunks_used > 0 && result.timestamp_start !== undefined) {
+  video.currentTime = result.timestamp_start   // exact float, no rounding
+}
+```
+
+---
+
+## 7. Teaching Pack Generation
+
+### Module: `app/codexvid/teaching.py`
+
+```
+chunks: [{text, start_time, end_time}, ...]   (semantic chunks, 30–60s each)
+sentences: [{text, start, end}, ...]           (from transcript.json)
+model: "llama3"
+    │
+    ├─[Phase 1] Parallel per-chunk LLM calls (N=VCAI_CODEXVID_TEACHING_CHUNK_WORKERS)
+    │    For each chunk:
+    │        prompt: "You are an educational content creator.
+    │                 Create a topic entry for this video segment.
+    │                 Text: {chunk.text}
+    │                 Time: {start_time}–{end_time}
+    │                 Return JSON: {topic_title, description, start_time, end_time}"
+    │        → LLM returns topic JSON
+    │        (fallback: use first 100 chars as title, generic description, if LLM fails)
+    │    → topic_list: [{topic_title, description, start_time, end_time}, ...]
+    │
+    ├─[Phase 2] Post-processing:
+    │    merge_adjacent_topics(topic_list):
+    │        → Compare consecutive topic titles with difflib.SequenceMatcher
+    │        → Merge if ratio ≥ 0.90 AND total topics would stay ≥ 5 (for long videos)
+    │
+    │    enforce_coverage(topic_list, chunks):
+    │        → topic_list[0].start_time  = chunks[0].start_time   (video start)
+    │        → topic_list[-1].end_time   = chunks[-1].end_time     (video end)
+    │
+    │    snap_chapter_times_to_sentences(topic_list, sentences):
+    │        → For each topic boundary, find nearest sentence start/end
+    │        → Snap to sentence boundary for cleaner chapter alignment
+    │
+    ├─[Phase 3] Second LLM call (summaries only, not raw transcript):
+    │    prompt: "You create study aids from segment summaries.
+    │             Topics: {topic_summaries}
+    │             Return JSON: {key_takeaways: [...], quiz: [{question, answer}]}"
+    │    → key_takeaways: list of 3–7 learning points
+    │    → quiz: list of 3–5 Q&A pairs
+    │
+    └─[Return]
+       {
+         "topics": [{topic_title, description, start_time, end_time}, ...],
+         "chapters": [same content, shaped for UI rendering],
+         "key_takeaways": ["...", ...],
+         "quiz": [{"question": "...", "answer": "..."}, ...]
+       }
+```
+
+---
+
+## 8. Session Video Streaming
+
+```
+GET /api/codexvid/sessions/{session_id}/video
+    │
+    ▼ Resolve path: {CODEXVID_SESSIONS_DIR}/{session_id}/source.mp4
+    │
+    ▼ Read file in chunks (streaming response)
+    │
+    ▼ HTTP response:
+    Content-Type: video/mp4
+    (or auto-detected MIME type)
+    Body: binary video stream
+```
+
+The `<video>` element in `learn.html` uses the browser's built-in range request support for seeking.
+
+---
+
+## 9. Health & Readiness
+
+### `GET /health`
+```
+Always returns 200:
+{ "status": "ok", "version": "1.0.0", "product": "codexvid-ai" }
+```
+
+### `GET /ready`
+```
+calls get_provider().list_models()
+    │
+    ├─ Success → 200: { "status": "ready", "checks": { "llm": "ok" } }
+    └─ Exception → 503: { "status": "not_ready", "checks": { "llm": "error: ..." } }
+```
+
+---
+
+## 10. Disk I/O Summary
+
+| Operation | Files Written | Files Read |
+|-----------|--------------|------------|
+| Upload | `source.mp4`, `transcript.json`, `chunks.json`, `faiss.index`, `faiss_meta.json`, `teaching.json` | — |
+| Chat | — | `faiss.index`, `faiss_meta.json`, `transcript.json` |
+| Video stream | — | `source.mp4` |
+| Exists check | — | `faiss.index` (stat only) |
+
+---
+
+## 11. Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| No file and no YouTube URL | HTTP 422 Unprocessable Entity |
+| Invalid YouTube URL (not YouTube) | HTTP 422 with message |
+| YouTube download fails | HTTP 500 with yt-dlp error |
+| Whisper fails on a window | That window skipped; rest proceed |
+| LLM call fails in teaching | Fallback topic with snippet title |
+| LLM returns invalid JSON in chat | Stage 2 retried with stricter prompt; fallback answer used |
+| Grounding score too low | Answer replaced with "Not clearly explained in this segment." |
+| Session not found on chat | HTTP 404 |
+| FAISS index missing on exists check | Returns `{"exists": false}` |
+
+---
+
+For component roles, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+For UI walkthrough, see [UI_CLICK_GUIDE.md](./UI_CLICK_GUIDE.md).
