@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${VCAI_PORT:-8501}:8501"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - VCAI_DATA_DIR=/app/data
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  ollama_data:

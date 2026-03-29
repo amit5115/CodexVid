@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-content-ai"
+version = "1.0.0"
+description = "CodexVid AI — video → transcript → lesson + grounded chat"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    "yt-dlp>=2024.1.0",
+    "faster-whisper>=1.0.0",
+    "ollama>=0.4.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "python-multipart>=0.0.18",
+    "faiss-cpu>=1.8.0",
+    "numpy>=1.26.0",
+    "boto3>=1.35.0",
+    "requests>=2.28.0",
+    "httpx>=0.27.0",
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+vcai = "app.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
