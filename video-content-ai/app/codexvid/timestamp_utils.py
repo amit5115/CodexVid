@@ -63,10 +63,15 @@ def merge_segments(segments: list[dict]) -> list[dict]:
             p["end"] = max(p["end"], s["end"])
             p["words"] = s.get("words") or p.get("words")
             continue
-        if s["text"] in p["text"]:
+        # Only absorb a shorter segment when it is a very short stub (< 4 words) AND
+        # is a strict substring of the previous segment.  The original unconstrained
+        # containment check caused cascading merges that collapsed an entire video's
+        # worth of fine segments into a single segment (all with the same start_time).
+        _short = len((s["text"] or "").split()) < 4
+        if _short and s["text"] in p["text"]:
             p["end"] = max(p["end"], s["end"])
             continue
-        if p["text"] in s["text"]:
+        if _short and p["text"] in s["text"]:
             out[-1] = dict(s)
             continue
         shifted = dict(s)
@@ -160,6 +165,11 @@ def words_to_fine_segments(
 
 _SENTENCE_END_RE = re.compile(r"[.!?…]['\"]?\s*$")
 
+# If no sentence-ending punctuation has been seen for this many seconds, force a
+# sentence boundary anyway.  Prevents a single mega-sentence when Whisper omits
+# punctuation (common with the `base` model on casual speech).
+_MAX_SENTENCE_SEC = 45.0
+
 
 def flatten_words_from_transcript(transcript: list[dict]) -> list[dict]:
     """Collect word-level timings from segments (Whisper ``words``) or linear interpolation."""
@@ -203,31 +213,21 @@ def flatten_words_from_transcript(transcript: list[dict]) -> list[dict]:
 
 
 def words_to_sentence_spans(words: list[dict]) -> list[dict]:
-    """Group words into sentences using ending punctuation; each has ``text``, ``start``, ``end``, ``words``."""
+    """Group words into sentences using ending punctuation.
+
+    Each returned sentence has ``text``, ``start``, ``end``, ``words``.
+
+    If no sentence-ending punctuation is found within ``_MAX_SENTENCE_SEC`` seconds, a
+    sentence boundary is forced at the current word.  This prevents a single mega-sentence
+    spanning the entire video when Whisper omits punctuation (common with the ``base`` model).
+    """
     if not words:
         return []
     words = sorted(words, key=lambda w: (float(w["start"]), float(w["end"])))
     out: list[dict] = []
     cur: list[dict] = []
-    for w in words:
-        wt = (w.get("word") or "").strip()
-        if not wt:
-            continue
-        cur.append({"word": wt, "start": float(w["start"]), "end": float(w["end"])})
-        stripped = wt.rstrip("\"'”’")
-        if _SENTENCE_END_RE.search(stripped) or stripped.endswith("…"):
-            text = " ".join(x["word"] for x in cur).strip()
-            if text:
-                out.append(
-                    {
-                        "text": text,
-                        "start": float(cur[0]["start"]),
-                        "end": float(cur[-1]["end"]),
-                        "words": [dict(x) for x in cur],
-                    }
-                )
-            cur = []
-    if cur:
+
+    def _flush(cur: list[dict]) -> None:
         text = " ".join(x["word"] for x in cur).strip()
         if text:
             out.append(
@@ -238,6 +238,28 @@ def words_to_sentence_spans(words: list[dict]) -> list[dict]:
                     "words": [dict(x) for x in cur],
                 }
             )
+
+    for w in words:
+        wt = (w.get("word") or "").strip()
+        if not wt:
+            continue
+        cur.append({"word": wt, "start": float(w["start"]), "end": float(w["end"])})
+
+        # Force a break if this sentence has been running longer than _MAX_SENTENCE_SEC,
+        # even when no punctuation has ended it yet.
+        cur_dur = float(cur[-1]["end"]) - float(cur[0]["start"])
+        if cur_dur >= _MAX_SENTENCE_SEC:
+            _flush(cur)
+            cur = []
+            continue
+
+        stripped = wt.rstrip('"\'')
+        if _SENTENCE_END_RE.search(stripped) or stripped.endswith("\u2026"):
+            _flush(cur)
+            cur = []
+
+    if cur:
+        _flush(cur)
     return out
 
 

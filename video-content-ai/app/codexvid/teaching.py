@@ -16,7 +16,8 @@ from app.core.llm import get_provider, normalize_llm_model_id
 logger = logging.getLogger(__name__)
 
 _MAX_TOPIC_DESC = 4_000
-_LONG_VIDEO_SEC = 300.0
+# Apply minimum-topic coverage enforcement for any video longer than 2 minutes.
+_LONG_VIDEO_SEC = 120.0
 _MIN_TOPICS_LONG_VIDEO = 5
 _DEFAULT_MERGE_SIMILARITY = 0.90
 _STRICT_MERGE_SIMILARITY = 0.98
@@ -102,34 +103,36 @@ def _llm_topic_for_chunk(
         return _fallback_topic(chunk, a, b, f"Segment {chunk_index + 1} (empty)")
 
     system = (
-        "You analyze a SHORT video transcript segment only. "
-        "Output ONLY valid JSON (no markdown fences). "
-        "Ground every claim in the segment text. "
-        "Do not invent other segments or summarize the whole video."
+        "You are a precise segment analyzer. "
+        "You receive ONE short transcript excerpt and must describe ONLY what is in that excerpt. "
+        "Output ONLY valid JSON with no markdown fences, no preamble, no trailing text. "
+        "NEVER describe topics from other parts of the video. "
+        "NEVER summarize the entire video. "
+        "NEVER use phrases like 'in this video', 'throughout the video', or 'the video covers'. "
+        "Ground every sentence of your description in the provided transcript text."
     )
-    user = f"""You are analyzing segment {chunk_index + 1} of {total_chunks} (non-overlapping time windows).
+    user = f"""SEGMENT {chunk_index + 1} of {total_chunks}
+TIME: {a:.3f}s – {b:.3f}s  (duration: {b - a:.1f}s)
 
-SEGMENT TIME RANGE (seconds): {a:.3f} to {b:.3f}
-
-SEGMENT TRANSCRIPT (this segment ONLY):
+TRANSCRIPT OF THIS SEGMENT ONLY:
+\"\"\"
 {body}
+\"\"\"
 
-Task:
-- Identify the MAIN topic discussed in THIS segment ONLY.
-- Do NOT summarize the entire video.
-- Do NOT merge with other segments.
-- Focus strictly on what is said in the text above.
+YOUR TASK:
+1. Read ONLY the transcript above.
+2. Identify the single main topic being discussed in THIS segment.
+3. Write a description (2–5 sentences) that covers what is said in THIS segment only.
+4. Do NOT reference any other part of the video.
+5. Do NOT write a general summary of the whole subject.
 
-Return JSON with this exact shape:
+Return this JSON (fill in the blanks, keep start_time and end_time as the exact numbers given):
 {{
-  "topic_title": "short specific title",
-  "description": "2–6 sentences explaining this segment only",
+  "topic_title": "<concise title for what THIS segment is about>",
+  "description": "<2–5 sentences about THIS segment only>",
   "start_time": {a},
   "end_time": {b}
-}}
-
-Rules:
-- start_time MUST be exactly {a} and end_time MUST be exactly {b} (numeric floats)."""
+}}"""
 
     provider = get_provider(model=model)
     raw = provider.chat(
@@ -153,6 +156,27 @@ Rules:
     desc = str(data.get("description") or "").strip() or body[:2000]
     if len(desc) > _MAX_TOPIC_DESC:
         desc = desc[:_MAX_TOPIC_DESC] + "…"
+
+    # Detect phrases that indicate the LLM summarised the whole video instead of
+    # the segment.  When this happens, substitute the raw transcript snippet so the
+    # chunk at least covers its correct time range.
+    _whole_video_phrases = (
+        "in this video",
+        "throughout the video",
+        "the video covers",
+        "the video discusses",
+        "this video explores",
+        "this video explains",
+        "the entire video",
+        "across the video",
+    )
+    if any(p in desc.lower() for p in _whole_video_phrases):
+        logger.warning(
+            "Chunk %d: LLM description appears to be a whole-video summary; using transcript snippet",
+            chunk_index,
+        )
+        snippet = body[:600] + ("…" if len(body) > 600 else "")
+        desc = snippet
 
     return {
         "topic_title": title,
