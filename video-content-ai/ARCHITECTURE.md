@@ -149,9 +149,9 @@ All providers implement:
 
 ### `app/codexvid/timestamp_utils.py`
 - `flatten_words_from_transcript(segments)` → flat word list with timestamps (interpolates if missing)
-- `words_to_sentence_spans(words)` → groups words into sentences by punctuation; each has `text`, `start`, `end`, `words`
+- `words_to_sentence_spans(words)` → groups words into sentences by punctuation; **forces a sentence break every 45 s** (`_MAX_SENTENCE_SEC = 45.0`) to prevent a single mega-sentence when Whisper omits punctuation; each span has `text`, `start`, `end`, `words`
 - `transcript_sentence_timeline(segments)` → full sentence list without word details
-- `merge_segments(segments)` → deduplicates and enforces chronological order
+- `merge_segments(segments)` → deduplicates and enforces chronological order; **substring containment only applied to short stubs (< 4 words)** to prevent cascading segment collapse
 - `words_to_fine_segments(words, min_sec, max_sec)` → short 2–5s segments
 - `normalize_transcript_segments(segments)` → merge + align + clean
 - `align_timestamps(segments)` → snaps to actual word timings, enforces monotonic boundaries
@@ -160,8 +160,11 @@ All providers implement:
 - `create_chunks(transcript, ...)` → `list[chunk_dict]`
   - Builds sentences from word timings via `timestamp_utils`
   - Greedily packs sentences into chunks of `SEM_CHUNK_MIN_SEC`–`SEM_CHUNK_MAX_SEC` (default 30–60s)
-  - Splits oversized sentences at word boundaries
+  - Splits oversized sentences at word boundaries; **if a sentence has no word timestamps, produces a single covering chunk instead of silently dropping it**
+  - **Post-validation:** if word-based chunking produces fewer chunks than `floor(video_duration / max_sec)`, switches to `_chunk_segments_by_time()` time-based fallback to guarantee multiple chunks
   - Each chunk: `{"text", "start_time", "end_time", "start", "end"}`
+- `_chunk_segments_by_time(segments, min_sec, max_sec)` → direct time-based chunking fallback (no word timestamp dependency)
+- `_expected_min_chunks(video_duration_sec, max_sec)` → minimum chunk count for a given video duration
 - `chunk_time_range(chunk)` → `(start_sec, end_sec)` tuple
 
 ### `app/codexvid/vector_store.py`
@@ -194,11 +197,12 @@ All providers implement:
 
 ### `app/codexvid/teaching.py`
 - `generate_teaching_output(chunks, sentences, model, workers)` → full teaching pack:
-  1. Parallel LLM calls (one per chunk) → `{topic_title, description, start_time, end_time}`
-  2. `merge_adjacent_topics()` — merge consecutive topics with title similarity ≥ 0.90 (difflib ratio)
-  3. `enforce_coverage()` — extend first/last topic to span full video
-  4. `snap_chapter_times_to_sentences()` — if sentences provided, snap chapter boundaries to nearest sentence
-  5. Second LLM call on topic summaries → `{key_takeaways: [...], quiz: [{question, answer}]}`
+  1. Parallel LLM calls (one per chunk) → `{topic_title, description, start_time, end_time}`; **system prompt explicitly forbids whole-video summaries and cross-segment references**
+  2. **Whole-video phrase detection:** if the LLM response contains phrases like "in this video", "throughout the video", or "the video covers", the raw transcript snippet is substituted to ensure segment-level accuracy
+  3. `merge_adjacent_topics()` — merge consecutive topics with title similarity ≥ 0.90 (difflib ratio)
+  4. `enforce_coverage()` — extend first/last topic to span full video; triggered earlier (`_LONG_VIDEO_SEC = 120.0`, down from 300.0)
+  5. `snap_chapter_times_to_sentences()` — if sentences provided, snap chapter boundaries to nearest sentence
+  6. Second LLM call on topic summaries → `{key_takeaways: [...], quiz: [{question, answer}]}`
 - Response shape: `{topics: [...], chapters: [...], key_takeaways: [...], quiz: [...]}`
 
 ### `app/services/transcription.py`
@@ -209,11 +213,11 @@ All providers implement:
 - `_parse_language(language)` → handles auto-detect and optional translation (e.g. `"en→es"`)
 
 ### `app/services/video.py`
-- `download_video(url, output_dir)` → downloads via yt-dlp, returns local MP4 path
-- `extract_playlist_urls(url)` → list of video URLs from a playlist
-- `fetch_youtube_info(url)` → `{title, duration, thumbnail_url, channel}`
-- `normalize_media_source(url)` → standardize URL form
-- FFmpeg utilities: audio extraction (16 kHz mono WAV), clip cutting, frame extraction
+- `is_url(source)` → returns True if the source string has an http/https scheme
+- `normalize_media_source(source)` → prepends `https://` to bare YouTube/video host strings missing a scheme
+- `download_video(url, output_dir)` → downloads via yt-dlp with multi-format + cookie fallback, returns local MP4 path
+- `_ydl_base_opts(use_cookies)` → builds shared yt-dlp options: socket timeout, iOS/Android player clients, optional browser cookies
+- `_find_node()` → locates the Node.js binary for yt-dlp JS runtime (optional)
 
 ### `app/services/aws_transcribe.py`
 - `transcribe_path_to_segments(audio_path, language, bucket, region, ...)` → Whisper-compatible segment list

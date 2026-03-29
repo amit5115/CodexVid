@@ -153,6 +153,8 @@ flat_words: [{word, start, end}, ...]
     │
     ▼ words_to_sentence_spans()
     (group words into sentences by punctuation: . ? ! ; \n)
+    (force sentence break every 45 s even without punctuation — prevents mega-sentence
+     when Whisper omits punctuation, e.g. with the `base` model on casual speech)
 sentences: [{text, start, end, words:[...]}, ...]
     │
     ▼ transcript_sentence_timeline()
@@ -194,12 +196,19 @@ segments (with word timestamps)
     │
     ▼ Handle oversized single sentences:
     (split at word boundaries when one sentence > SEM_CHUNK_MAX_SEC)
+    (if sentence has no word timestamps, produce one covering chunk — no silent drop)
+    │
+    ▼ Post-validation: minimum chunk count enforcement
+    expected_min = floor(video_duration / SEM_CHUNK_MAX_SEC)
+    if len(word_based_chunks) < expected_min:
+        → switch to _chunk_segments_by_time() time-based fallback
+        (groups segments directly by elapsed time, no word timestamp dependency)
     │
     ▼ return
 chunks: [{text, start_time, end_time, start, end}, ...]
 ```
 
-Each chunk is roughly 30–60 seconds and always ends at a sentence boundary (never mid-sentence).
+Each chunk is roughly 30–60 seconds and always ends at a sentence boundary (never mid-sentence). The time-based fallback guarantees multiple chunks even when Whisper word timestamps are missing or sparse.
 
 ---
 
@@ -341,12 +350,15 @@ model: "llama3"
     │
     ├─[Phase 1] Parallel per-chunk LLM calls (N=VCAI_CODEXVID_TEACHING_CHUNK_WORKERS)
     │    For each chunk:
-    │        prompt: "You are an educational content creator.
-    │                 Create a topic entry for this video segment.
-    │                 Text: {chunk.text}
-    │                 Time: {start_time}–{end_time}
+    │        system: "You are a precise segment analyzer. Describe ONLY what is in this
+    │                 excerpt. NEVER summarize the whole video. NEVER use phrases like
+    │                 'in this video' or 'throughout the video'."
+    │        user:   "Text: {chunk.text}  Time: {start_time}–{end_time}
     │                 Return JSON: {topic_title, description, start_time, end_time}"
     │        → LLM returns topic JSON
+    │        → Post-check: if description contains whole-video phrases
+    │          ("in this video", "throughout the video", "the video covers", etc.)
+    │          → substitute raw transcript snippet as description
     │        (fallback: use first 100 chars as title, generic description, if LLM fails)
     │    → topic_list: [{topic_title, description, start_time, end_time}, ...]
     │
@@ -356,6 +368,7 @@ model: "llama3"
     │        → Merge if ratio ≥ 0.90 AND total topics would stay ≥ 5 (for long videos)
     │
     │    enforce_coverage(topic_list, chunks):
+    │        → Triggered for videos ≥ 120 s (LONG_VIDEO_SEC, down from 300 s)
     │        → topic_list[0].start_time  = chunks[0].start_time   (video start)
     │        → topic_list[-1].end_time   = chunks[-1].end_time     (video end)
     │
