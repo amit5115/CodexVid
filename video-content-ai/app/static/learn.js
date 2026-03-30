@@ -23,6 +23,8 @@
 
   let sessionId = null;
   let chatBusy = false;
+  let chaptersData = [];       // stored after upload for active tracking + segment chat
+  let segmentContext = null;   // {title, start, end, text} when segment chat is active
 
   function showScreen(name) {
     Object.values(screens).forEach((s) => s.classList.remove("active"));
@@ -75,10 +77,7 @@
     container.querySelectorAll(".ts-jump").forEach((btn) => {
       btn.addEventListener("click", () => {
         const sec = parseFloat(String(btn.getAttribute("data-start") || "0"));
-        if (elVideo && !Number.isNaN(sec)) {
-          elVideo.currentTime = sec;
-          elVideo.play().catch(() => {});
-        }
+        seekVideo(sec);
       });
     });
   }
@@ -148,22 +147,33 @@
     const kt = teaching.key_takeaways || [];
     const qz = teaching.quiz || [];
 
+    // Store for active chapter tracking and segment chat
+    chaptersData = ch.map((c, i) => ({
+      title: c.title || "Section " + (i + 1),
+      start: c.start != null ? Number(c.start) : 0,
+      end: c.end != null ? Number(c.end) : 0,
+      text: c.explanation || "",
+    }));
+
     let html = "";
     if (ch.length) {
       html += "<h3 class='teaching-section-title'>Chapters</h3>";
       ch.forEach((c, i) => {
+        const startSec = c.start != null ? Number(c.start) : 0;
+        const endSec = c.end != null ? Number(c.end) : 0;
         const steps = (c.step_by_step || [])
           .map((s) => `<li>${escapeHtml(s)}</li>`)
           .join("");
-        const meta =
+        const timeBtn =
           c.start != null && c.end != null
-            ? `<p class="meta chapter-time">${escapeHtml(formatChapterTime(c.start))} – ${escapeHtml(
-                formatChapterTime(c.end)
-              )}</p>`
+            ? `<button type="button" class="chapter-time-btn" data-start="${startSec}" data-end="${endSec}">${escapeHtml(formatChapterTime(c.start))} – ${escapeHtml(formatChapterTime(c.end))}</button>`
             : "";
-        html += `<div class="chapter">
+        html += `<div class="chapter" data-index="${i}" data-start="${startSec}" data-end="${endSec}">
           <h3>${escapeHtml(c.title || "Section " + (i + 1))}</h3>
-          ${meta}
+          <div class="chapter-actions">
+            ${timeBtn}
+            <button type="button" class="btn-segment-chat" data-index="${i}">&#x1F4AC; Ask about this</button>
+          </div>
           <p>${escapeHtml(c.explanation || "")}</p>
           ${steps ? `<p class="meta">Steps</p><ul>${steps}</ul>` : ""}
           ${c.analogy ? `<p><strong>Analogy:</strong> ${escapeHtml(c.analogy)}</p>` : ""}
@@ -186,6 +196,98 @@
       });
     }
     elTeachingBody.innerHTML = html || "<p>No structured content returned.</p>";
+    bindChapterInteractions();
+  }
+
+  // — Chapter interactions: seek on timestamp click, open segment chat —
+  function bindChapterInteractions() {
+    // Timestamp seek buttons
+    elTeachingBody.querySelectorAll(".chapter-time-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const sec = parseFloat(btn.getAttribute("data-start") || "0");
+        seekVideo(sec);
+      });
+    });
+    // Segment chat buttons
+    elTeachingBody.querySelectorAll(".btn-segment-chat").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.getAttribute("data-index"), 10);
+        openSegmentChat(idx);
+      });
+    });
+  }
+
+  function seekVideo(sec) {
+    if (!elVideo || Number.isNaN(sec)) return;
+    elVideo.currentTime = sec;
+    elVideo.play().catch(() => {});
+  }
+
+  // — Active chapter tracking via video timeupdate —
+  let lastActiveIdx = -1;
+  elVideo.addEventListener("timeupdate", () => {
+    const t = elVideo.currentTime;
+    let activeIdx = -1;
+    for (let i = 0; i < chaptersData.length; i++) {
+      if (t >= chaptersData[i].start && t <= chaptersData[i].end) {
+        activeIdx = i;
+        break;
+      }
+    }
+    if (activeIdx === lastActiveIdx) return;
+    lastActiveIdx = activeIdx;
+    elTeachingBody.querySelectorAll(".chapter").forEach((el) => {
+      const idx = parseInt(el.getAttribute("data-index"), 10);
+      el.classList.toggle("active", idx === activeIdx);
+    });
+    // Auto-scroll active chapter into view
+    if (activeIdx >= 0) {
+      const activeEl = elTeachingBody.querySelector(`.chapter[data-index="${activeIdx}"]`);
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  });
+
+  // — Segment-scoped chat —
+  const elSegCtx = document.getElementById("segment-context");
+  const elSegCtxText = document.getElementById("segment-context-text");
+  const elSegCtxClear = document.getElementById("segment-context-clear");
+
+  function openSegmentChat(idx) {
+    if (idx < 0 || idx >= chaptersData.length) return;
+    const ch = chaptersData[idx];
+    segmentContext = ch;
+    // Show the context banner
+    elSegCtxText.textContent = `Chatting about: "${ch.title}" (${formatChapterTime(ch.start)} – ${formatChapterTime(ch.end)})`;
+    elSegCtx.style.display = "";
+    // Switch to chat tab
+    elTeachTabs.querySelectorAll("button").forEach((b) => {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
+    const bChat = elTeachTabs.querySelector('button[data-tab="chat"]');
+    bChat.classList.add("active");
+    bChat.setAttribute("aria-selected", "true");
+    elPanelLearn.classList.remove("active");
+    elPanelChat.classList.add("active");
+    // Also seek video to segment start
+    seekVideo(ch.start);
+    // Focus the input
+    elChatInput.placeholder = `Ask about "${ch.title}"…`;
+    elChatInput.focus();
+  }
+
+  function clearSegmentContext() {
+    segmentContext = null;
+    elSegCtx.style.display = "none";
+    elChatInput.placeholder = "Ask a question about the video…";
+  }
+
+  if (elSegCtxClear) {
+    elSegCtxClear.addEventListener("click", clearSegmentContext);
   }
 
   elTeachTabs.addEventListener("click", (e) => {
@@ -200,6 +302,8 @@
     const tab = btn.getAttribute("data-tab");
     elPanelLearn.classList.toggle("active", tab === "learn");
     elPanelChat.classList.toggle("active", tab === "chat");
+    // Clear segment context when switching to lesson tab
+    if (tab === "learn") clearSegmentContext();
   });
 
   const elDropzone = document.getElementById("dropzone");
@@ -268,6 +372,8 @@
         throw new Error(data.error || res.statusText);
       }
       sessionId = data.session_id;
+      clearSegmentContext();
+      lastActiveIdx = -1;
       renderTeaching(data.teaching);
       elVideo.src = `/api/codexvid/sessions/${sessionId}/video`;
       elChatLog.innerHTML = "";
@@ -298,13 +404,23 @@
     appendUserMessage(q);
     elChatInput.value = "";
 
+    // Build query: prepend segment context if active so the LLM scopes its answer
+    let query = q;
+    if (segmentContext) {
+      query =
+        `[SEGMENT CONTEXT — answer ONLY using this segment]\n` +
+        `Segment: "${segmentContext.title}" (${formatChapterTime(segmentContext.start)} – ${formatChapterTime(segmentContext.end)})\n` +
+        `Transcript: ${segmentContext.text}\n\n` +
+        `Question: ${q}`;
+    }
+
     try {
       const res = await fetch("/api/codexvid/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
-          query: q,
+          query: query,
           model: elModel.value,
         }),
       });

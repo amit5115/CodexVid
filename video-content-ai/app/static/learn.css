@@ -652,14 +652,23 @@ button.btn-primary:disabled {
 /* —— Workspace —— */
 .workspace {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1.85fr 1fr;
   gap: 1.5rem;
   min-height: 72vh;
+  align-items: start;
+}
+
+.panel-video {
+  position: sticky;
+  top: 80px;
 }
 
 @media (max-width: 960px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+  .panel-video {
+    position: static;
   }
 }
 
@@ -738,9 +747,10 @@ button.btn-primary:disabled {
 
 video.learn-video {
   width: 100%;
-  max-height: 46vh;
   display: block;
   object-fit: contain;
+  aspect-ratio: 16 / 9;
+  background: #000;
 }
 
 .panel-body {
@@ -838,8 +848,62 @@ video.learn-video {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
 }
 
+.chapter.active {
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.08);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2), 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
 .chapter h3 { margin: 0 0 0.35rem; font-size: 1rem; font-weight: 700; color: var(--text); font-family: var(--font-display); }
 .chapter .meta { font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.06em; }
+
+.chapter-time-btn {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  background: rgba(34, 211, 238, 0.06);
+  color: var(--accent-2);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.chapter-time-btn:hover {
+  background: rgba(34, 211, 238, 0.14);
+  border-color: rgba(34, 211, 238, 0.4);
+  transform: translateY(-1px);
+}
+
+.chapter-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.btn-segment-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 7px;
+  border: 1px solid rgba(129, 140, 248, 0.2);
+  background: rgba(99, 102, 241, 0.06);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn-segment-chat:hover {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(129, 140, 248, 0.4);
+}
 .chapter ul { margin: 0.35rem 0; padding-left: 1.1rem; }
 
 .takeaways li { margin: 0.35rem 0; }
@@ -986,4 +1050,57 @@ video.learn-video {
   .learn-header-actions {
     width: 100%;
   }
+}
+
+/* —— Segment context banner —— */
+.segment-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(34, 211, 238, 0.06));
+  border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.segment-context-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.segment-context-inner span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.segment-context-icon {
+  flex-shrink: 0;
+}
+
+.segment-context-clear {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.segment-context-clear:hover {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
 }
