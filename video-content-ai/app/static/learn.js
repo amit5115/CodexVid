@@ -23,8 +23,9 @@
 
   let sessionId = null;
   let chatBusy = false;
-  let chaptersData = [];       // stored after upload for active tracking + segment chat
-  let segmentContext = null;   // {title, start, end, text} when segment chat is active
+  let chaptersData = [];       // populated after upload
+  let segmentContext = null;   // {title, start, end, text} — active segment for scoped chat
+  const segmentCache = {};     // {[chapterIndex]: {answer, mode, meta}} — avoids re-fetching
 
   function showScreen(name) {
     Object.values(screens).forEach((s) => s.classList.remove("active"));
@@ -256,14 +257,8 @@
   const elSegCtxText = document.getElementById("segment-context-text");
   const elSegCtxClear = document.getElementById("segment-context-clear");
 
-  function openSegmentChat(idx) {
-    if (idx < 0 || idx >= chaptersData.length) return;
-    const ch = chaptersData[idx];
-    segmentContext = ch;
-    // Show the context banner
-    elSegCtxText.textContent = `Chatting about: "${ch.title}" (${formatChapterTime(ch.start)} – ${formatChapterTime(ch.end)})`;
-    elSegCtx.style.display = "";
-    // Switch to chat tab
+  /** Switch the right panel to the Chat tab. */
+  function switchToChat() {
     elTeachTabs.querySelectorAll("button").forEach((b) => {
       b.classList.remove("active");
       b.setAttribute("aria-selected", "false");
@@ -273,11 +268,128 @@
     bChat.setAttribute("aria-selected", "true");
     elPanelLearn.classList.remove("active");
     elPanelChat.classList.add("active");
-    // Also seek video to segment start
+  }
+
+  /** Enable/disable all "Ask about this" buttons. */
+  function setSegmentBtnsDisabled(disabled) {
+    elTeachingBody.querySelectorAll(".btn-segment-chat").forEach((btn) => {
+      btn.disabled = disabled;
+    });
+  }
+
+  /** Append an animated "Thinking…" placeholder; returns its element. */
+  function appendThinkingMessage() {
+    const el = document.createElement("div");
+    el.className = "msg assistant msg--thinking";
+    el.id = "chat-msg-thinking";
+    el.innerHTML =
+      `<div class="thinking-dots"><span></span><span></span><span></span></div>` +
+      `<span class="thinking-label">Thinking\u2026</span>`;
+    elChatLog.appendChild(el);
+    elChatLog.scrollTop = elChatLog.scrollHeight;
+    return el;
+  }
+
+  /** Remove the thinking placeholder and render the real assistant message. */
+  function replaceThinking(text, mode, meta) {
+    const el = document.getElementById("chat-msg-thinking");
+    if (el) el.remove();
+    appendAssistantMessage(text, mode, meta);
+  }
+
+  /**
+   * Auto-generate a segment explanation:
+   *  • shows user message + thinking bubble immediately
+   *  • fires the chat API scoped to this segment's transcript
+   *  • caches the result so a second click is instant
+   *  • disables all "Ask about this" buttons while in-flight
+   */
+  async function generateSegmentExplanation(idx, ch) {
+    chatBusy = true;
+    setSegmentBtnsDisabled(true);
+
+    appendUserMessage("Explain this segment in simple terms");
+    appendThinkingMessage();
+
+    // Scoped query: the LLM sees only this segment's transcript
+    const query =
+      `[SEGMENT CONTEXT — explain ONLY this segment, do not summarise the whole video]\n` +
+      `Segment: "${ch.title}" (${formatChapterTime(ch.start)} – ${formatChapterTime(ch.end)})\n` +
+      `Transcript:\n${ch.text}\n\n` +
+      `Task: Explain this segment clearly and simply for a beginner. ` +
+      `Use only the transcript above.`;
+
+    try {
+      const res = await fetch("/api/codexvid/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          query,
+          model: elModel.value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const answer = res.ok ? (data.answer || "") : (data.error || "Request failed.");
+      const mode = data.mode || null;
+      const meta = {
+        timestamp_start: data.timestamp_start,
+        timestamp_end: data.timestamp_end,
+        key_points: data.key_points,
+        chunks_used: data.chunks_used,
+      };
+      // Cache so re-clicking the same chapter is instant
+      segmentCache[idx] = { answer, mode, meta };
+      replaceThinking(answer, mode, meta);
+    } catch (e) {
+      replaceThinking(
+        "Sorry, something went wrong. Please try again.",
+        null,
+        {}
+      );
+    } finally {
+      chatBusy = false;
+      setSegmentBtnsDisabled(false);
+    }
+  }
+
+  /**
+   * Called when user clicks "Ask about this" on a chapter card.
+   * Switches to chat, sets context banner, seeks video, then either
+   * serves a cached explanation or fires a new one automatically.
+   */
+  function openSegmentChat(idx) {
+    if (idx < 0 || idx >= chaptersData.length) return;
+    if (chatBusy) return;   // debounce: ignore while a fetch is in-flight
+
+    const ch = chaptersData[idx];
+    segmentContext = ch;
+
+    // Update the context banner
+    elSegCtxText.textContent = `Chatting about: "${ch.title}" (${formatChapterTime(ch.start)} – ${formatChapterTime(ch.end)})`;
+    elSegCtx.style.display = "";
+
+    switchToChat();
     seekVideo(ch.start);
-    // Focus the input
-    elChatInput.placeholder = `Ask about "${ch.title}"…`;
-    elChatInput.focus();
+    elChatInput.placeholder = `Ask a follow-up about "${ch.title}"…`;
+
+    // Empty transcript guard
+    if (!ch.text || !ch.text.trim()) {
+      appendUserMessage("Explain this segment in simple terms");
+      appendAssistantMessage("No transcript available for this segment.", null, {});
+      return;
+    }
+
+    // Serve from cache if available (instant, no API call)
+    if (segmentCache[idx]) {
+      const c = segmentCache[idx];
+      appendUserMessage("Explain this segment in simple terms");
+      appendAssistantMessage(c.answer, c.mode, c.meta);
+      return;
+    }
+
+    // Auto-fire: no typing required
+    generateSegmentExplanation(idx, ch);
   }
 
   function clearSegmentContext() {
@@ -374,6 +486,8 @@
       sessionId = data.session_id;
       clearSegmentContext();
       lastActiveIdx = -1;
+      // Wipe per-segment cache — new video, new answers
+      Object.keys(segmentCache).forEach((k) => delete segmentCache[k]);
       renderTeaching(data.teaching);
       elVideo.src = `/api/codexvid/sessions/${sessionId}/video`;
       elChatLog.innerHTML = "";
