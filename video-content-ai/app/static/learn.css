@@ -685,8 +685,8 @@ button.btn-primary:disabled {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 300px;
 }
+
 
 .panel-stack {
   min-height: 440px;
@@ -729,11 +729,8 @@ button.btn-primary:disabled {
 
 .video-frame {
   position: relative;
-  flex: 1;
   background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  line-height: 0; /* collapse whitespace around <video> */
 }
 
 .video-frame::before {
