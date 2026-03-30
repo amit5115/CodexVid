@@ -125,6 +125,13 @@
           <div id="teaching-body" class="panel-body teaching-scroll"></div>
         </div>
         <div id="panel-chat" class="tab-panel" role="tabpanel">
+          <div id="segment-context" class="segment-context" style="display:none">
+            <div class="segment-context-inner">
+              <span class="segment-context-icon">&#x1F4CD;</span>
+              <span id="segment-context-text"></span>
+            </div>
+            <button type="button" id="segment-context-clear" class="segment-context-clear" aria-label="Clear segment context">&times;</button>
+          </div>
           <div id="chat-log" class="chat-log"></div>
           <form id="chat-form" class="chat-form">
             <textarea id="chat-input" rows="2" placeholder="Ask a question about the video…" autocomplete="off"></textarea>
