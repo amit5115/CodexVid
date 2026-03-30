@@ -251,7 +251,9 @@ Content-Type: application/json
   "session_id": "abc123...",
   "query": "What is gradient descent?",
   "model": "llama3",
-  "mode": "simple"
+  "mode": "simple",
+  "segment_start": 57.0,   // optional — present when user clicked "Ask about this"
+  "segment_end": 108.0     // optional — restricts FAISS hits to this time window
 }
 ```
 
@@ -259,7 +261,8 @@ Content-Type: application/json
 
 1. Calls `load_store(session_id)` → loads `faiss.index` + `faiss_meta.json`
 2. Calls `store.search(query, k=RAG_TOP_K)` → top-k chunks with scores
-3. Calls `chat(query, retrieved_chunks, model, mode, session_id)` in thread pool
+3. **Segment filtering** (when `segment_start`/`segment_end` are present): keeps only hits whose `[start_time, end_time]` overlaps the requested window; falls back to all hits if none overlap
+4. Calls `chat(query, filtered_chunks, model, mode, session_id)` in thread pool
 
 ### 6.3 `chat()` Pipeline (`app/codexvid/chat.py`)
 
@@ -325,16 +328,20 @@ session_id: "abc123..."
 ```javascript
 result = await fetch('/api/codexvid/chat', ...).json()
 
-// Append to chat log
-appendAssistantMessage(result.answer, result.mode, {
-  timestamp_start: result.timestamp_start,
-  key_points: result.key_points,
-})
+// When a segment is active (user clicked "Ask about this"), the frontend
+// overrides the returned timestamp with the SELECTED segment's boundaries
+// so the jump button always points to the correct chapter.
+const activeSeg = segmentContext   // captured before the await
+const meta = activeSeg
+  ? { timestamp_start: activeSeg.start, timestamp_end: activeSeg.end,
+      key_points: result.key_points, chunks_used: result.chunks_used || 1 }
+  : { timestamp_start: result.timestamp_start, timestamp_end: result.timestamp_end,
+      key_points: result.key_points, chunks_used: result.chunks_used }
 
-// Jump video to relevant sentence
-if (result.chunks_used > 0 && result.timestamp_start !== undefined) {
-  video.currentTime = result.timestamp_start   // exact float, no rounding
-}
+appendAssistantMessage(result.answer, result.mode, meta)
+
+// Jump button in the message seeks video.currentTime = meta.timestamp_start
+// (always in mm:ss display, exact float for seek)
 ```
 
 ---

@@ -27,7 +27,13 @@ There is **no** legacy workspace API, jobs database, ChromaDB, or scoring pipeli
 - **Whole-video-summary detection** — per-chunk LLM responses are inspected for phrases like "in this video" or "throughout the video"; if found the raw transcript snippet is substituted to ensure segment-level accuracy
 - **Pluggable LLM** — Ollama (default), OpenAI, Anthropic, or internal Company GPT proxy
 - **Health endpoints** — `GET /health` (liveness), `GET /ready` (LLM reachability)
-- **Premium UI** — dark-mode SPA (`learn.html`) with video playback, Lesson/Chat tabs, and click-to-seek from chat timestamps
+- **Premium UI** — dark-mode SPA (`learn.html`) with:
+  - 65/35 workspace layout: sticky video panel on left, tabbed Lesson/Chat panel on right
+  - **Chapter cards** — each shows a clickable timestamp pill (mm:ss format) that seeks the video, an active-highlight border when the video is playing through that segment, and an **"Ask about this"** button
+  - **Auto-explain on "Ask about this"** — clicking the button immediately fires an API request without any user typing; an animated "Thinking…" bubble appears, then the explanation replaces it; result is cached per chapter for instant replay
+  - **Segment context banner** — shows the active chapter while chatting about a specific segment; can be dismissed to return to whole-video chat
+  - **Segment-scoped chat** — follow-up messages typed while a segment context is active are automatically scoped to that chapter's time range
+  - **Timestamps in mm:ss format** — jump-to-segment links in chat display human-readable times (e.g. `7:03 – 7:16`) instead of raw seconds
 
 ---
 
@@ -166,9 +172,13 @@ Ask a question about a session's video content.
   "session_id": "abc123...",
   "query": "What is this about?",
   "model": "llama3",
-  "mode": "simple"
+  "mode": "simple",
+  "segment_start": 423.44,
+  "segment_end": 486.0
 }
 ```
+
+`segment_start` and `segment_end` are optional floats (seconds). When provided, FAISS hits outside the specified time range are filtered out so the LLM context is restricted to that chapter. Used by the "Ask about this" feature to prevent cross-segment contamination.
 
 **Response:**
 ```json
