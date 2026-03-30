@@ -106,7 +106,7 @@
       const ts = meta.timestamp_start;
       const te =
         typeof meta.timestamp_end === "number" ? meta.timestamp_end : ts;
-      const line = `📍 Jump to segment (${ts.toFixed(3)}s – ${te.toFixed(3)}s)`;
+      const line = `📍 Jump to segment (${formatChapterTime(ts)} – ${formatChapterTime(te)})`;
       html =
         `<button type="button" class="ts-jump" data-start="${String(ts)}">${escapeHtml(
           line
