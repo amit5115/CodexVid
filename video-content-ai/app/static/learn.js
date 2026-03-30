@@ -319,6 +319,9 @@
       `Task: Explain this segment clearly and simply for a beginner. ` +
       `Use only the transcript above.`;
 
+    console.log("[CodexVid] generateSegmentExplanation — ACTIVE SEGMENT:", ch.title,
+      `(${formatChapterTime(ch.start)} – ${formatChapterTime(ch.end)})`);
+
     try {
       const res = await fetch("/api/codexvid/chat", {
         method: "POST",
@@ -327,17 +330,24 @@
           session_id: sessionId,
           query,
           model: elModel.value,
+          // Tell the backend to restrict FAISS hits to this time window
+          segment_start: ch.start,
+          segment_end: ch.end,
         }),
       });
       const data = await res.json().catch(() => ({}));
       const answer = res.ok ? (data.answer || "") : (data.error || "Request failed.");
       const mode = data.mode || null;
+      // Always use the SELECTED SEGMENT's timestamps — never the FAISS-retrieved ones.
+      // This guarantees the jump button always points to the correct chapter.
       const meta = {
-        timestamp_start: data.timestamp_start,
-        timestamp_end: data.timestamp_end,
+        timestamp_start: ch.start,
+        timestamp_end: ch.end,
         key_points: data.key_points,
-        chunks_used: data.chunks_used,
+        chunks_used: data.chunks_used || 1,
       };
+      console.log("[CodexVid] Explanation received for segment:", ch.title,
+        "| jump → ", formatChapterTime(ch.start), "–", formatChapterTime(ch.end));
       // Cache so re-clicking the same chapter is instant
       segmentCache[idx] = { answer, mode, meta };
       replaceThinking(answer, mode, meta);
@@ -518,14 +528,20 @@
     appendUserMessage(q);
     elChatInput.value = "";
 
-    // Build query: prepend segment context if active so the LLM scopes its answer
+    // Capture segment at submit-time — prevents stale reads if the user
+    // switches to a different chapter while this request is in-flight.
+    const activeSeg = segmentContext;
+
+    // Build query: prepend segment context so the LLM scopes its answer
     let query = q;
-    if (segmentContext) {
+    if (activeSeg) {
       query =
         `[SEGMENT CONTEXT — answer ONLY using this segment]\n` +
-        `Segment: "${segmentContext.title}" (${formatChapterTime(segmentContext.start)} – ${formatChapterTime(segmentContext.end)})\n` +
-        `Transcript: ${segmentContext.text}\n\n` +
+        `Segment: "${activeSeg.title}" (${formatChapterTime(activeSeg.start)} – ${formatChapterTime(activeSeg.end)})\n` +
+        `Transcript: ${activeSeg.text}\n\n` +
         `Question: ${q}`;
+      console.log("[CodexVid] Manual question — ACTIVE SEGMENT:", activeSeg.title,
+        `(${formatChapterTime(activeSeg.start)} – ${formatChapterTime(activeSeg.end)})`);
     }
 
     try {
@@ -534,23 +550,39 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
-          query: query,
+          query,
           model: elModel.value,
+          // Restrict FAISS hits to the selected segment's time window
+          ...(activeSeg ? { segment_start: activeSeg.start, segment_end: activeSeg.end } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        appendAssistantMessage(data.error || "Request failed.", null);
+        appendAssistantMessage(data.error || "Request failed.", null, {});
       } else {
-        appendAssistantMessage(data.answer || "", data.mode, {
-          timestamp_start: data.timestamp_start,
-          timestamp_end: data.timestamp_end,
-          key_points: data.key_points,
-          chunks_used: data.chunks_used,
-        });
+        // When a segment is active, always show the SELECTED segment's timestamps
+        // in the jump button — never let FAISS hits from other parts of the video
+        // hijack the pointer.
+        const meta = activeSeg
+          ? {
+              timestamp_start: activeSeg.start,
+              timestamp_end: activeSeg.end,
+              key_points: data.key_points,
+              chunks_used: data.chunks_used || 1,
+            }
+          : {
+              timestamp_start: data.timestamp_start,
+              timestamp_end: data.timestamp_end,
+              key_points: data.key_points,
+              chunks_used: data.chunks_used,
+            };
+        console.log("[CodexVid] Response — jump →",
+          formatChapterTime(meta.timestamp_start), "–", formatChapterTime(meta.timestamp_end),
+          "| segment:", activeSeg ? activeSeg.title : "(full video)");
+        appendAssistantMessage(data.answer || "", data.mode, meta);
       }
     } catch (e) {
-      appendAssistantMessage(String(e.message || e), null);
+      appendAssistantMessage(String(e.message || e), null, {});
     } finally {
       chatBusy = false;
     }

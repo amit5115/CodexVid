@@ -34,7 +34,9 @@ class CodexvidChatBody(BaseModel):
     session_id: str = Field(..., min_length=8)
     query: str = Field(..., min_length=1)
     model: str | None = None
-    mode: str | None = None  # optional override; else auto-detect
+    mode: str | None = None       # optional override; else auto-detect
+    segment_start: float | None = None  # if set, restrict FAISS hits to this time range
+    segment_end: float | None = None
 
 
 @router.post("/upload")
@@ -136,6 +138,33 @@ async def codexvid_chat_endpoint(body: CodexvidChatBody):
         None,
         lambda: store.search(body.query.strip(), k=k),
     )
+
+    # When the user clicked a specific chapter, restrict answers to that segment.
+    # Filter FAISS hits to chunks that overlap [segment_start, segment_end].
+    # If no hit overlaps (e.g. very short segment), keep all hits so the LLM
+    # still has something to work with.
+    if body.segment_start is not None and body.segment_end is not None:
+        seg_s = float(body.segment_start)
+        seg_e = float(body.segment_end)
+        in_range = [
+            h for h in hits
+            if not (
+                h.get("end_time", h.get("end", 0)) < seg_s
+                or h.get("start_time", h.get("start", 0)) > seg_e
+            )
+        ]
+        if in_range:
+            hits = in_range
+            logger.debug(
+                "Segment filter [%.1fs–%.1fs]: kept %d/%d hits",
+                seg_s, seg_e, len(hits), k,
+            )
+        else:
+            logger.debug(
+                "Segment filter [%.1fs–%.1fs]: no overlap found, using all %d hits",
+                seg_s, seg_e, len(hits),
+            )
+
     model = body.model or DEFAULT_MODEL
     explicit = body.mode.strip() if body.mode else ""
     mode = explicit if explicit else detect_mode(body.query)
