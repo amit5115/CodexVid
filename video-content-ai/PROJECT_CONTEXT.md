@@ -70,6 +70,7 @@ video-content-ai/
 │   │   ├── __init__.py
 │   │   ├── health.py               GET /health  GET /ready
 │   │   └── codexvid.py             POST /upload  POST /chat  GET /exists  GET /video
+│   │                               Chat body accepts segment_start/segment_end for FAISS time-range filtering
 │   │
 │   ├── core/
 │   │   ├── __init__.py
@@ -85,6 +86,7 @@ video-content-ai/
 │   │   ├── retrieval_utils.py      embed_texts, cosine_similarity, sentence filtering + pick
 │   │   ├── chat.py                 detect_mode, chat() — two-stage LLM + grounding + timestamps
 │   │   └── teaching.py             generate_teaching_output() — per-chunk LLM, merge, takeaways, quiz
+│   │                               _extract_json(): 2-strategy robust JSON extractor (fence strip + block scan)
 │   │
 │   ├── services/
 │   │   ├── __init__.py
@@ -94,8 +96,14 @@ video-content-ai/
 │   │
 │   └── static/
 │       ├── learn.html              Three-screen SPA: upload → processing → workspace
+│       │                           Includes #segment-context banner for active chapter display
 │       ├── learn.js                Upload handler, chat, rendering, video seek (vanilla JS)
+│       │                           Chapter interactions: timestamp seek, "Ask about this" auto-explain,
+│       │                           segmentCache, segmentContext, active chapter tracking via timeupdate
 │       └── learn.css               Dark theme, animations, responsive layout
+│                                   65/35 grid (1.85fr/1fr), sticky video panel, chapter active highlight,
+│                                   chapter-time-btn pill, btn-segment-chat, segment-context banner,
+│                                   Thinking… animated dots
 │
 ├── tests/
 │   ├── __init__.py
@@ -156,6 +164,10 @@ video-content-ai/
 9. **Overlapping audio windows** — 5s overlap reduces Whisper boundary word drops
 10. **Grounding check** — token overlap between answer and transcript; low confidence → safe fallback
 11. **Thread pool for blocking I/O** — Whisper and LLM calls run in `ThreadPoolExecutor` so FastAPI event loop stays responsive
+12. **Segment-scoped FAISS filtering** — `POST /api/codexvid/chat` accepts optional `segment_start`/`segment_end` floats; after FAISS retrieval, hits outside the requested time range are discarded so chat context stays within the user's selected chapter
+13. **Auto-explain on segment click** — clicking "Ask about this" immediately triggers a `generateSegmentExplanation()` call without requiring user input; a "Thinking…" animated bubble appears while the API is in flight; result is cached in `segmentCache[idx]` for instant replay on re-click
+14. **Stale-closure prevention** — the async chat submit handler captures `const activeSeg = segmentContext` synchronously before any `await`; all timestamp metadata uses the captured value, never the (potentially changed) module-level reference
+15. **Robust LLM JSON extraction** — `_extract_json(raw)` in `teaching.py` uses a two-strategy fallback: (1) strip markdown fences then `json.loads`; (2) scan for outermost `{…}` block and parse that; handles Ollama models that prepend/append freeform text around JSON output
 
 ---
 

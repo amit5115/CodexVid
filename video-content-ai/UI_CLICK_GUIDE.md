@@ -13,28 +13,34 @@ There is **no** legacy workspace SPA in this build — only the learn experience
 The UI has three screens that show one at a time:
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Header: "CodexVid AI"  |  Model dropdown        │
-├─────────────────────────────────────────────────┤
-│                                                  │
-│  SCREEN 1: Upload                                │
-│  ┌──────────────────────────────────────────┐   │
-│  │  YouTube link input                      │   │
-│  │  File drop zone                          │   │
-│  │  [Process video]                         │   │
-│  └──────────────────────────────────────────┘   │
-│                                                  │
-│  SCREEN 2: Processing (spinner / status)         │
-│                                                  │
-│  SCREEN 3: Workspace                             │
-│  ┌──────────────┬─────────────────────────────┐ │
-│  │              │ [Lesson] [Chat]              │ │
-│  │  <video>     ├─────────────────────────────┤ │
-│  │              │ Tab content:                 │ │
-│  │              │  Lesson: chapters + quiz     │ │
-│  │              │  Chat:   message log + input │ │
-│  └──────────────┴─────────────────────────────┘ │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Header: "CodexVid AI"  |  Model dropdown            │
+├─────────────────────────────────────────────────────┤
+│  SCREEN 1: Upload                                    │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  YouTube link input  /  File drop zone        │  │
+│  │  [Process video]                              │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                      │
+│  SCREEN 2: Processing (spinner / status dots)        │
+│                                                      │
+│  SCREEN 3: Workspace  (65 / 35 split)                │
+│  ┌──────────────────────┬────────────────────────┐  │
+│  │  <video 16:9>        │ [Lesson]  [Chat]        │  │
+│  │  sticky, left panel  ├────────────────────────┤  │
+│  │                      │ Lesson tab:             │  │
+│  │                      │  Chapter cards          │  │
+│  │                      │  ├─ [mm:ss–mm:ss] pill  │  │
+│  │                      │  └─ [💬 Ask about this] │  │
+│  │                      │  Key takeaways / Quiz   │  │
+│  │                      ├────────────────────────┤  │
+│  │                      │ Chat tab:               │  │
+│  │                      │  [segment context banner│  │
+│  │                      │  + × clear button]      │  │
+│  │                      │  Message log            │  │
+│  │                      │  [text input] [send]    │  │
+│  └──────────────────────┴────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -146,107 +152,133 @@ The UI has three screens that show one at a time:
 
 ## 5. Screen 3: Workspace
 
-Shown after a successful upload. Contains three areas: video panel, tab bar, and tab content.
+Shown after a successful upload. Layout: **65 / 35 grid** — video on the left, lesson/chat panel on the right.
 
 ### Video Panel
 
 | Element | ID | What It Does |
 |---------|-----|--------------|
-| Video player | `#learnVideo` | HTML5 `<video controls>` element |
+| Video player | `#learnVideo` | HTML5 `<video controls>` — 16:9 aspect ratio, sticky at top |
 
 **Source:** Set to `/api/codexvid/sessions/{session_id}/video` after upload completes.
-The server streams `source.mp4` from the session directory. Browser uses HTTP range requests for seeking.
+The server streams `source.mp4`. Browser uses HTTP range requests for seeking.
 
-**Seeking from chat:** `learn.js` calls `video.currentTime = timestamp_start` (exact float seconds, no rounding) when a chat response includes a timestamp. This jumps to the sentence the LLM identified as most relevant to your question.
+**Auto-seek from chat:** When an assistant response includes a jump button (`📍`), clicking it calls `video.currentTime = timestamp_start` + `video.play()`. In segment mode, the timestamp always corresponds to the selected chapter.
+
+**Active chapter tracking:** As the video plays, `timeupdate` fires ~4× per second. The current chapter (whose `start ≤ currentTime ≤ end`) gets an accent-border glow; the lesson panel auto-scrolls to keep it in view.
 
 ### Tab Bar
 
 | Button | `data-tab` | What It Shows |
 |--------|-----------|---------------|
 | **Lesson** | `learn` | Teaching pack: chapters, key takeaways, quiz |
-| **Chat** | `chat` | Chat log + input form |
+| **Chat** | `chat` | Segment context banner + message log + input |
 
-Clicking a tab shows its panel and hides the other. Active tab gets a highlighted style.
+Clicking **Lesson** also clears any active segment context.
 
 ---
 
 ## 6. Lesson Tab
 
-Populated by `renderTeaching(teaching)` in `learn.js` using `payload.teaching` from the upload response.
+Populated by `renderTeaching(teaching)` in `learn.js` using `payload.teaching` from the upload response. Chapter data is stored in `chaptersData[]` for active-tracking and segment chat.
 
-### Chapters / Topics Section
+### Chapter Cards
 
-Each topic from `teaching.topics` (or `teaching.chapters`) renders as:
+Each chapter renders as a card with:
 
-| Element | Content |
-|---------|---------|
-| Chapter title | `topic_title` from LLM |
-| Time range | Formatted as `mm:ss – mm:ss` from `start_time`/`end_time` |
-| Description | `description` from LLM |
-| Clickable timestamp | Clicking the time range → sets `video.currentTime` to `start_time` |
+| Element | Class | What It Does |
+|---------|-------|--------------|
+| Chapter title | `h3` inside `.chapter` | Static label from LLM |
+| **Timestamp pill** | `.chapter-time-btn` | Teal clickable button showing `mm:ss – mm:ss`; click → seeks video to `start_time` + plays |
+| **"💬 Ask about this"** | `.btn-segment-chat` | Opens Chat tab and auto-generates an explanation; no typing required |
+| Description | `p` | LLM explanation for the segment |
+| Active highlight | `.chapter.active` | Accent border + background glow; applied while video plays through this chapter |
 
-Topics are sorted chronologically and cover the full video duration (enforced by `enforce_coverage()` on the server).
+**Chapter timestamp format:** All times shown as `m:ss` (e.g. `7:03 – 7:16`), never raw seconds.
+
+**Active chapter:** `.chapter.active` is applied via `timeupdate` listener. When the playing position enters a chapter's time range, the card highlights and the lesson panel scrolls to it automatically.
+
+### "💬 Ask about this" — Full Flow
+
+1. Click the button on any chapter card
+2. Chat tab opens; context banner appears: `Chatting about: "Chapter Title" (0:57 – 1:48)`
+3. Video seeks to chapter start + plays
+4. User message `"Explain this segment in simple terms"` appears in chat log
+5. Animated **"Thinking…"** bubble appears immediately (3 bouncing dots)
+6. `POST /api/codexvid/chat` fires with `segment_start`/`segment_end` — backend restricts FAISS hits to that time window
+7. Thinking bubble is replaced by the AI explanation
+8. Jump button in the response always points to the selected chapter's times
+9. **Re-clicking the same chapter** → instant response from `segmentCache` (no API call)
+10. All "Ask about this" buttons are disabled while a fetch is in-flight (debounce)
+
+**Edge cases:**
+- Empty transcript for segment → shows "No transcript available" without API call
+- API error → thinking bubble replaced with friendly error; buttons re-enabled
+- Segment cache cleared on new video upload
 
 ### Key Takeaways Section
 
-A bulleted list of learning points from `teaching.key_takeaways`. Generated by a second LLM call from the topic summaries (not the raw transcript).
+Bulleted list from `teaching.key_takeaways`. Generated server-side from topic summaries.
 
 ### Quiz Section
 
-Q&A pairs from `teaching.quiz`. Each item shows:
-- Question text
-- Toggle/reveal answer (or shown inline depending on CSS)
+Q&A pairs from `teaching.quiz`. Question + answer shown inline.
 
 ---
 
 ## 7. Chat Tab
 
+### Segment Context Banner
+
+| Element | ID | What It Does |
+|---------|-----|--------------|
+| Banner | `#segment-context` | Shown when a chapter is active; hidden for full-video chat |
+| Label | `#segment-context-text` | `Chatting about: "Title" (mm:ss – mm:ss)` |
+| Clear button `×` | `#segment-context-clear` | Clears segment context; returns to full-video chat mode |
+
+When segment context is active:
+- The chat input placeholder changes to `Ask a follow-up about "Chapter Title"…`
+- Every query sent from the form is prefixed with the segment's transcript so the LLM scopes its answer
+- `segment_start`/`segment_end` are sent to the API to filter FAISS hits
+- Jump buttons always show the selected chapter's timestamps (not FAISS-derived ones)
+
 ### Chat Log
 
 | Element | ID | What It Shows |
 |---------|-----|---------------|
-| Log container | `#chat-log` | Scrollable list of user and assistant messages |
-
-**User message format:** Plain text, right-aligned or styled differently from assistant.
+| Log container | `#chat-log` | User messages (right-aligned) + assistant messages |
 
 **Assistant message format:**
-- Answer text with basic markdown rendering (`**bold**` → `<strong>`, etc.)
-- Key points list (from `result.key_points`)
-- Timestamp button (e.g. `📍 00:12`) — clicking seeks video to that timestamp
-- Mode indicator (e.g. `[simple]`, `[detailed]`)
+- `📍 Jump to segment (mm:ss – mm:ss)` button — clicking seeks video
+- Answer text (markdown `**bold**` → `<strong>`)
+- Key points bulleted list
+- Teaching mode badge (`[simple]`, `[detailed]`, etc.)
 
 ### Chat Input
 
 | Element | ID | What It Does |
 |---------|-----|--------------|
-| Text area | `#chat-input` | Type your question about the video |
-| Submit button | part of `#chat-form` | Send the question |
+| Text area | `#chat-input` | Type a follow-up question; Enter submits |
+| Submit button | `#chat-form button[type=submit]` | Sends query to `/api/codexvid/chat` |
 
-**Keyboard shortcut:** Enter submits the form (Shift+Enter for newline, depending on JS config).
+**What happens when you submit:**
+1. `chatBusy` guard checked — blocks concurrent submissions
+2. `segmentContext` captured at submit-time (avoids stale closure if user switches chapter)
+3. User message appended; textarea cleared
+4. Query built: if segment active, full context prefix prepended
+5. `POST /api/codexvid/chat` with `segment_start`/`segment_end` if segment active
+6. Response rendered; jump button timestamp overridden with selected segment's times if active
+7. `chatBusy` cleared
 
-**What happens when you send a message:**
-1. `chatBusy` flag is set (prevents concurrent submissions)
-2. User message appended to chat log
-3. Textarea cleared
-4. Sends `POST /api/codexvid/chat`:
-   ```json
-   {
-     "session_id": "abc123...",
-     "query": "What is gradient descent?",
-     "model": "llama3"
-   }
-   ```
-5. Waits for response (no streaming in current build)
-6. Appends assistant message to chat log
-7. If `result.chunks_used > 0` and `result.timestamp_start` is defined: seeks video to `timestamp_start`
-8. `chatBusy` cleared
+**Chat modes (auto-detected from query text):**
 
-**Chat modes (auto-detected from query keywords):**
-- `simple` — plain explanation
-- `detailed` — thorough technical breakdown
-- `analogy` — explains using a real-world comparison
-- `example` — provides a concrete example
-- `default` — balanced teacher style
+| Keyword pattern | Mode |
+|----------------|------|
+| "simple", "easy", "basic" | `simple` |
+| "detail", "explain", "in depth" | `detailed` |
+| "analogy", "like", "compare" | `analogy` |
+| "example", "show me" | `example` |
+| (default) | `default` |
 
 ---
 
@@ -256,39 +288,39 @@ Q&A pairs from `teaching.quiz`. Each item shows:
 |------|--------|----------|---------|
 | Process video clicked | `POST` | `/api/codexvid/upload` | FormData: file/youtube_url, model, whisper_model, language |
 | After upload succeeds | `GET` | `/api/codexvid/sessions/{id}/video` | — (set as `<video src>`) |
-| Chat message sent | `POST` | `/api/codexvid/chat` | JSON: session_id, query, model |
+| "Ask about this" click | `POST` | `/api/codexvid/chat` | JSON: session_id, query, model, segment_start, segment_end |
+| Manual chat message | `POST` | `/api/codexvid/chat` | JSON: session_id, query, model, segment_start*, segment_end* |
+
+\* `segment_start`/`segment_end` only included when a segment is active.
 
 **Chat response fields used by UI:**
 
 | Field | Used For |
 |-------|---------|
-| `answer` | Main text displayed in chat |
-| `timestamp_start` | `video.currentTime = timestamp_start` for seeking |
-| `timestamp_end` | Displayed as end of timestamp range |
+| `answer` | Main text displayed in chat bubble |
+| `timestamp_start` | Overridden by segment start when segment active; used for jump button |
+| `timestamp_end` | Overridden by segment end when segment active |
 | `key_points` | Bulleted list shown below answer |
-| `chunks_used` | Gate for whether to seek (seek only if > 0) |
-| `grounded` | (not displayed but available) |
-| `grounding_score` | (not displayed but available) |
-| `mode` | Mode badge shown next to answer |
-| `timestamps` | Legacy `📍 mm:ss` seek buttons in answer text |
+| `chunks_used` | Used to decide whether to show jump button |
+| `mode` | Teaching mode badge |
 
 ---
 
 ## 9. Seek Behavior Details
 
-The UI uses **exact float seconds** for all video seeks:
+All video seeks use exact float seconds:
 
 ```javascript
-// Primary seek (from chat API response)
-video.currentTime = result.timestamp_start;  // e.g. 12.345
+// Chapter timestamp pill click
+video.currentTime = ch.start;   // e.g. 57.0
+video.play();
 
-// Secondary seek (from 📍 labels in answer text — legacy)
-const parts = label.split(":");
-const seconds = parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
-video.currentTime = seconds;
+// Jump button in chat (📍 mm:ss – mm:ss)
+video.currentTime = meta.timestamp_start;  // always the selected segment in segment mode
+video.play();
 ```
 
-The `timestamp_start` value is the `start` time of the **best-matching sentence** within the retrieved FAISS chunks (determined by cosine similarity between the query embedding and sentence embeddings). This gives sub-chunk precision — usually pointing to the exact spoken sentence most relevant to your question.
+**Timestamp display format:** `formatChapterTime(sec)` → `Math.floor(sec / 60) + ":" + padded_secs`. Example: `423.44 → "7:03"`. Never shows raw seconds in the UI.
 
 ---
 

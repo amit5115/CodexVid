@@ -63,7 +63,7 @@ Covers the core HTTP surface of the FastAPI app.
 | `test_index_serves_learn_html` | `GET /` serves `learn.html` with CodexVid branding in body |
 | `test_learn_serves_learn_html` | `GET /learn` serves same `learn.html` |
 
-**Note:** There is no workspace API, ChromaDB, or scoring pipeline in this build — only the CodexVid routes listed above.
+**Note:** There is no workspace API, ChromaDB, or scoring pipeline in this build — only the CodexVid routes listed above. The chat endpoint accepts optional `segment_start`/`segment_end` fields for FAISS time-range filtering; these are not separately tested but are exercised implicitly in any chat integration test.
 
 **Mocking pattern:**
 ```python

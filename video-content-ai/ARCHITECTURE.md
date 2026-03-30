@@ -105,7 +105,9 @@ No workspace router, no ChromaDB, no SQLite job queue in this build.
 ### `app/api/codexvid.py`
 - Request/response Pydantic models for upload and chat
 - `POST /api/codexvid/upload`: validates form, delegates to `process_upload()` in a thread pool executor (so async FastAPI isn't blocked), returns session metadata + teaching pack
-- `POST /api/codexvid/chat`: loads FAISS store, calls `chat()` in thread pool, returns structured JSON
+- `POST /api/codexvid/chat`: loads FAISS store, runs FAISS search, **optionally filters hits to a specific time window** (`segment_start`/`segment_end` fields in request body — used by the UI when the user clicks "Ask about this" on a chapter), calls `chat()` in thread pool, returns structured JSON
+  - `CodexvidChatBody` fields: `session_id`, `query`, `model`, `mode`, `segment_start` (optional float), `segment_end` (optional float)
+  - If `segment_start`/`segment_end` are provided, FAISS hits outside `[segment_start, segment_end]` are filtered out; falls back to all hits if none overlap the window
 - `GET /api/codexvid/sessions/{id}/exists`: calls `load_store()` and checks if index file exists
 - `GET /api/codexvid/sessions/{id}/video`: streams `source.mp4` from the session directory
 
@@ -198,11 +200,12 @@ All providers implement:
 ### `app/codexvid/teaching.py`
 - `generate_teaching_output(chunks, sentences, model, workers)` → full teaching pack:
   1. Parallel LLM calls (one per chunk) → `{topic_title, description, start_time, end_time}`; **system prompt explicitly forbids whole-video summaries and cross-segment references**
-  2. **Whole-video phrase detection:** if the LLM response contains phrases like "in this video", "throughout the video", or "the video covers", the raw transcript snippet is substituted to ensure segment-level accuracy
-  3. `merge_adjacent_topics()` — merge consecutive topics with title similarity ≥ 0.90 (difflib ratio)
-  4. `enforce_coverage()` — extend first/last topic to span full video; triggered earlier (`_LONG_VIDEO_SEC = 120.0`, down from 300.0)
-  5. `snap_chapter_times_to_sentences()` — if sentences provided, snap chapter boundaries to nearest sentence
-  6. Second LLM call on topic summaries → `{key_takeaways: [...], quiz: [{question, answer}]}`
+  2. **`_extract_json(raw)`** — robust JSON extractor used for all LLM responses; tries two strategies: (a) direct parse after markdown-fence stripping, (b) scan for outermost `{…}` block to handle preamble text or trailing notes from local LLMs; logs the first 120 chars of raw output on failure
+  3. **Whole-video phrase detection:** if the LLM response contains phrases like "in this video", "throughout the video", or "the video covers", the raw transcript snippet is substituted to ensure segment-level accuracy
+  4. `merge_adjacent_topics()` — merge consecutive topics with title similarity ≥ 0.90 (difflib ratio)
+  5. `enforce_coverage()` — extend first/last topic to span full video; triggered earlier (`_LONG_VIDEO_SEC = 120.0`, down from 300.0)
+  6. `snap_chapter_times_to_sentences()` — if sentences provided, snap chapter boundaries to nearest sentence
+  7. Second LLM call on topic summaries → `{key_takeaways: [...], quiz: [{question, answer}]}`; also uses `_extract_json`
 - Response shape: `{topics: [...], chapters: [...], key_takeaways: [...], quiz: [...]}`
 
 ### `app/services/transcription.py`
