@@ -30,6 +30,42 @@ def _strip_json_fences(text: str) -> str:
     return t.strip()
 
 
+def _extract_json(raw: str) -> dict | None:
+    """Try multiple strategies to extract a JSON object from LLM output.
+
+    Handles:
+    - Plain JSON
+    - Markdown fences (```json ... ```)
+    - Preamble text before the object ("Here is the JSON: {...}")
+    - Trailing text after the closing brace
+    """
+    text = _strip_json_fences(raw)
+
+    # Strategy 1: direct parse after fence removal
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: find outermost {...} block
+    start = text.find("{")
+    if start != -1:
+        # Walk backwards from the end to find the matching closing brace
+        end = text.rfind("}")
+        if end != -1 and end > start:
+            candidate = text[start : end + 1]
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+    return None
+
+
 def _sentence_boundary_times(sentences: list[dict]) -> list[float]:
     vals: list[float] = []
     for s in sentences:
@@ -142,14 +178,13 @@ Return this JSON (fill in the blanks, keep start_time and end_time as the exact 
             {"role": "user", "content": user},
         ],
     )
-    text = _strip_json_fences(raw)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Chunk %d: JSON parse failed; fallback", chunk_index)
-        return _fallback_topic(chunk, a, b, f"Segment {chunk_index + 1}")
-
-    if not isinstance(data, dict):
+    data = _extract_json(raw)
+    if data is None:
+        logger.warning(
+            "Chunk %d: JSON parse failed (raw=%r…); fallback",
+            chunk_index,
+            raw[:120],
+        )
         return _fallback_topic(chunk, a, b, f"Segment {chunk_index + 1}")
 
     title = str(data.get("topic_title") or "").strip() or f"Segment {chunk_index + 1}"
@@ -309,11 +344,9 @@ Rules: exactly 3 quiz questions; 4–8 key takeaways."""
             {"role": "user", "content": user},
         ],
     )
-    text = _strip_json_fences(raw)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Takeaways/quiz JSON parse failed")
+    data = _extract_json(raw)
+    if data is None:
+        logger.warning("Takeaways/quiz JSON parse failed (raw=%r…)", raw[:120])
         return [], []
     kt = data.get("key_takeaways") or []
     qz = data.get("quiz") or []
