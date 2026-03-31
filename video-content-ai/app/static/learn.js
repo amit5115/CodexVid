@@ -69,6 +69,27 @@
     else stopProcessingAnimation();
   }
 
+  function bindPremiumInteractions() {
+    document.querySelectorAll(".interactive-surface").forEach((el) => {
+      el.addEventListener("mousemove", (ev) => {
+        const rect = el.getBoundingClientRect();
+        const mx = ((ev.clientX - rect.left) / rect.width) * 100;
+        const my = ((ev.clientY - rect.top) / rect.height) * 100;
+        el.style.setProperty("--mx", `${mx}%`);
+        el.style.setProperty("--my", `${my}%`);
+      });
+    });
+
+    if (elChatInput) {
+      const resize = () => {
+        elChatInput.style.height = "auto";
+        elChatInput.style.height = `${Math.min(elChatInput.scrollHeight, 140)}px`;
+      };
+      elChatInput.addEventListener("input", resize);
+      resize();
+    }
+  }
+
   function parseMmss(label) {
     const parts = String(label).trim().split(":");
     if (parts.length === 2) {
@@ -520,6 +541,8 @@
       );
     });
   }
+
+  bindPremiumInteractions();
 
   $("#btn-start-upload").addEventListener("click", async () => {
     elErrUpload.textContent = "";
