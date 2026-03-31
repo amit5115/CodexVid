@@ -77,12 +77,6 @@ CODEXVID_WHISPER_CHUNK_SEC = int(
 CODEXVID_PARALLEL_WORKERS = int(
     os.getenv("VCAI_CODEXVID_PARALLEL_WORKERS") or os.getenv("VCAI_TEACHER_PARALLEL_WORKERS") or "4"
 )
-CODEXVID_MAX_PARALLEL_WORKERS = int(
-    os.getenv("VCAI_CODEXVID_MAX_PARALLEL_WORKERS") or "8"
-)
-CODEXVID_WHISPER_BEAM_SIZE = int(
-    os.getenv("VCAI_CODEXVID_WHISPER_BEAM_SIZE") or "2"
-)
 # Overlap between audio windows (reduces Whisper boundary drops); step = chunk - overlap
 CODEXVID_AUDIO_OVERLAP_SEC = float(
     os.getenv("VCAI_CODEXVID_AUDIO_OVERLAP_SEC") or os.getenv("VCAI_CODEXVID_OVERLAP_SEC") or "5"
