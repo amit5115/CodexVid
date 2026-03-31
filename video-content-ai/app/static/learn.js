@@ -20,18 +20,74 @@
   const elChatForm = $("#chat-form");
   const elChatInput = $("#chat-input");
   const elModel = $("#learn-model");
+  const elThemeToggle = $("#theme-toggle");
+  const elDropzoneHint = $("#dropzone-hint");
+  const elProcessingProgress = $("#processing-progress");
+  const elProcessingStage = $("#processing-stage");
 
   let sessionId = null;
   let chatBusy = false;
   let chaptersData = [];       // populated after upload
   let segmentContext = null;   // {title, start, end, text} — active segment for scoped chat
   const segmentCache = {};     // {[chapterIndex]: {answer, mode, meta}} — avoids re-fetching
+  let processingTimer = null;
+
+  function startProcessingAnimation() {
+    if (!elProcessingProgress || !elProcessingStage) return;
+    const stages = [
+      "Preparing upload…",
+      "Reading video stream…",
+      "Transcribing speech…",
+      "Building smart chunks…",
+      "Generating lesson + quiz…",
+    ];
+    let idx = 0;
+    let progress = 8;
+    elProcessingProgress.style.width = "8%";
+    elProcessingStage.textContent = stages[0];
+    clearInterval(processingTimer);
+    processingTimer = setInterval(() => {
+      idx = (idx + 1) % stages.length;
+      progress = Math.min(progress + 12, 92);
+      elProcessingProgress.style.width = `${progress}%`;
+      elProcessingStage.textContent = stages[idx];
+    }, 900);
+  }
+
+  function stopProcessingAnimation() {
+    clearInterval(processingTimer);
+    processingTimer = null;
+    if (elProcessingProgress) elProcessingProgress.style.width = "100%";
+  }
 
   function showScreen(name) {
     Object.values(screens).forEach((s) => s.classList.remove("active"));
     screens[name].classList.add("active");
     document.body.classList.toggle("is-workspace", name === "workspace");
     document.body.classList.toggle("is-processing", name === "processing");
+    if (name === "processing") startProcessingAnimation();
+    else stopProcessingAnimation();
+  }
+
+  function bindPremiumInteractions() {
+    document.querySelectorAll(".interactive-surface").forEach((el) => {
+      el.addEventListener("mousemove", (ev) => {
+        const rect = el.getBoundingClientRect();
+        const mx = ((ev.clientX - rect.left) / rect.width) * 100;
+        const my = ((ev.clientY - rect.top) / rect.height) * 100;
+        el.style.setProperty("--mx", `${mx}%`);
+        el.style.setProperty("--my", `${my}%`);
+      });
+    });
+
+    if (elChatInput) {
+      const resize = () => {
+        elChatInput.style.height = "auto";
+        elChatInput.style.height = `${Math.min(elChatInput.scrollHeight, 140)}px`;
+      };
+      elChatInput.addEventListener("input", resize);
+      resize();
+    }
   }
 
   function parseMmss(label) {
@@ -431,6 +487,14 @@
   const elDropzone = document.getElementById("dropzone");
   const elFileVideo = document.getElementById("file-video");
   if (elDropzone && elFileVideo) {
+    elFileVideo.addEventListener("change", () => {
+      const file = elFileVideo.files && elFileVideo.files[0];
+      if (elDropzoneHint) {
+        elDropzoneHint.textContent = file
+          ? `Selected: ${file.name}`
+          : "or click to browse · MP4, WebM, MOV, MKV…";
+      }
+    });
     ["dragenter", "dragover"].forEach((ev) => {
       elDropzone.addEventListener(ev, (e) => {
         e.preventDefault();
@@ -465,6 +529,20 @@
       }
     });
   }
+
+  if (elThemeToggle) {
+    const stored = localStorage.getItem("codexvid_theme");
+    if (stored === "vivid") document.body.classList.add("theme-vivid");
+    elThemeToggle.addEventListener("click", () => {
+      document.body.classList.toggle("theme-vivid");
+      localStorage.setItem(
+        "codexvid_theme",
+        document.body.classList.contains("theme-vivid") ? "vivid" : "default"
+      );
+    });
+  }
+
+  bindPremiumInteractions();
 
   $("#btn-start-upload").addEventListener("click", async () => {
     elErrUpload.textContent = "";
