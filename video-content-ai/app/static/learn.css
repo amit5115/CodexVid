@@ -54,6 +54,12 @@ body {
   overflow-x: hidden;
 }
 
+body.theme-vivid {
+  --accent: #f472b6;
+  --accent-2: #22d3ee;
+  --accent-mid: #f59e0b;
+}
+
 /* —— Ambient background —— */
 .ambient {
   position: fixed;
@@ -175,6 +181,35 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.8);
+  color: var(--text-secondary);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-ghost:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+  border-color: rgba(129, 140, 248, 0.35);
+}
+
+.theme-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px rgba(129, 140, 248, 0.6);
 }
 
 .learn-model-label {
@@ -484,6 +519,23 @@ select.sel-header {
   color: var(--text-tertiary);
 }
 
+.upload-tips {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: center;
+}
+
+.tip-chip {
+  padding: 0.24rem 0.52rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.7);
+}
+
 .row-actions {
   display: flex;
   gap: 0.75rem;
@@ -624,6 +676,30 @@ button.btn-primary:disabled {
   font-size: 0.875rem;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+.processing-progress-wrap {
+  margin: 1rem auto 0.25rem;
+  width: min(260px, 90%);
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+.processing-progress {
+  width: 8%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.4s ease;
+}
+
+.processing-stage {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
 }
 
 .processing-dots {
