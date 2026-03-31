@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/learn.css?v=7"/>
+  <link rel="stylesheet" href="/static/learn.css?v=8"/>
 </head>
 <body>
   <div class="ambient" aria-hidden="true">
@@ -39,6 +39,10 @@
       </div>
     </div>
     <div class="learn-header-actions">
+      <button type="button" id="theme-toggle" class="btn-ghost" aria-label="Toggle visual theme">
+        <span class="theme-dot" aria-hidden="true"></span>
+        <span class="theme-label">Vibe mode</span>
+      </button>
       <label class="learn-model-label">
         <span class="learn-model-text">Model</span>
         <div class="select-wrap">
@@ -77,8 +81,13 @@
                 </svg>
               </div>
               <p class="dropzone-title">Drop your video here</p>
-              <p class="dropzone-hint">or click to browse · MP4, WebM, MOV, MKV…</p>
+              <p class="dropzone-hint" id="dropzone-hint">or click to browse · MP4, WebM, MOV, MKV…</p>
             </div>
+          </div>
+          <div class="upload-tips">
+            <div class="tip-chip">⚡ Faster with short clips</div>
+            <div class="tip-chip">🎯 Ask chapter-specific questions</div>
+            <div class="tip-chip">📍 Click timestamps to jump</div>
           </div>
           <div class="row-actions">
             <button type="button" class="btn-primary btn-primary--shine" id="btn-start-upload">
@@ -99,6 +108,10 @@
       </div>
       <p class="processing-title">Building your lesson</p>
       <p class="processing-text">Transcribing audio, indexing content, and generating your study pack…</p>
+      <div class="processing-progress-wrap" aria-hidden="true">
+        <div id="processing-progress" class="processing-progress"></div>
+      </div>
+      <p class="processing-stage" id="processing-stage">Preparing upload…</p>
       <div class="processing-dots" aria-hidden="true">
         <span></span><span></span><span></span>
       </div>
@@ -146,6 +159,6 @@
 
 </main>
 
-<script src="/static/learn.js?v=7"></script>
+<script src="/static/learn.js?v=8"></script>
 </body>
 </html>
