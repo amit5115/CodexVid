@@ -20,18 +20,107 @@
   const elChatForm = $("#chat-form");
   const elChatInput = $("#chat-input");
   const elModel = $("#learn-model");
+  const elThemeToggle = $("#theme-toggle");
+  const elDropzoneHint = $("#dropzone-hint");
+  const elProcessingProgress = $("#processing-progress");
+  const elProcessingStage = $("#processing-stage");
+  const elProcessingEta = $("#processing-eta");
 
   let sessionId = null;
   let chatBusy = false;
   let chaptersData = [];       // populated after upload
   let segmentContext = null;   // {title, start, end, text} — active segment for scoped chat
   const segmentCache = {};     // {[chapterIndex]: {answer, mode, meta}} — avoids re-fetching
+  let processingTimer = null;
+  let processingState = { startedAt: 0, expectedSec: 90 };
+
+  function formatDuration(sec) {
+    const s = Math.max(0, Math.ceil(sec));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  }
+
+  function estimateProcessingSeconds(yt, file) {
+    const historical = Number(localStorage.getItem("codexvid_processing_avg_secs") || "0");
+    let predicted = yt ? 125 : 80;
+    if (file && Number.isFinite(file.size)) {
+      const sizeMb = file.size / (1024 * 1024);
+      predicted = Math.max(45, Math.min(600, 35 + sizeMb * 1.4));
+    }
+    if (historical > 0) {
+      predicted = predicted * 0.65 + historical * 0.35;
+    }
+    return Math.max(30, Math.round(predicted));
+  }
+
+  function startProcessingAnimation(expectedSec) {
+    if (!elProcessingProgress || !elProcessingStage) return;
+    const stages = [
+      "Preparing upload…",
+      "Reading video stream…",
+      "Transcribing speech…",
+      "Building smart chunks…",
+      "Generating lesson + quiz…",
+    ];
+    processingState.startedAt = Date.now();
+    processingState.expectedSec = expectedSec || 90;
+    let idx = 0;
+    elProcessingProgress.style.width = "4%";
+    elProcessingStage.textContent = stages[0];
+    if (elProcessingEta) {
+      elProcessingEta.textContent = `Estimated time left: ${formatDuration(processingState.expectedSec)}`;
+    }
+    clearInterval(processingTimer);
+    processingTimer = setInterval(() => {
+      const elapsedSec = (Date.now() - processingState.startedAt) / 1000;
+      const stageWindow = processingState.expectedSec / stages.length;
+      idx = Math.min(stages.length - 1, Math.floor(elapsedSec / Math.max(1, stageWindow)));
+      const progress = Math.min(92, 4 + (elapsedSec / processingState.expectedSec) * 88);
+      elProcessingProgress.style.width = `${progress}%`;
+      elProcessingStage.textContent = stages[idx];
+      if (elProcessingEta) {
+        const remaining = Math.max(0, processingState.expectedSec - elapsedSec);
+        elProcessingEta.textContent = `Estimated time left: ${formatDuration(remaining)}`;
+      }
+    }, 900);
+  }
+
+  function stopProcessingAnimation() {
+    clearInterval(processingTimer);
+    processingTimer = null;
+    if (elProcessingProgress) elProcessingProgress.style.width = "100%";
+    if (elProcessingEta) elProcessingEta.textContent = "Finalizing lesson…";
+  }
 
   function showScreen(name) {
     Object.values(screens).forEach((s) => s.classList.remove("active"));
     screens[name].classList.add("active");
     document.body.classList.toggle("is-workspace", name === "workspace");
     document.body.classList.toggle("is-processing", name === "processing");
+    if (name === "processing") startProcessingAnimation(processingState.expectedSec);
+    else stopProcessingAnimation();
+  }
+
+  function bindPremiumInteractions() {
+    document.querySelectorAll(".interactive-surface").forEach((el) => {
+      el.addEventListener("mousemove", (ev) => {
+        const rect = el.getBoundingClientRect();
+        const mx = ((ev.clientX - rect.left) / rect.width) * 100;
+        const my = ((ev.clientY - rect.top) / rect.height) * 100;
+        el.style.setProperty("--mx", `${mx}%`);
+        el.style.setProperty("--my", `${my}%`);
+      });
+    });
+
+    if (elChatInput) {
+      const resize = () => {
+        elChatInput.style.height = "auto";
+        elChatInput.style.height = `${Math.min(elChatInput.scrollHeight, 140)}px`;
+      };
+      elChatInput.addEventListener("input", resize);
+      resize();
+    }
   }
 
   function parseMmss(label) {
@@ -431,6 +520,14 @@
   const elDropzone = document.getElementById("dropzone");
   const elFileVideo = document.getElementById("file-video");
   if (elDropzone && elFileVideo) {
+    elFileVideo.addEventListener("change", () => {
+      const file = elFileVideo.files && elFileVideo.files[0];
+      if (elDropzoneHint) {
+        elDropzoneHint.textContent = file
+          ? `Selected: ${file.name}`
+          : "or click to browse · MP4, WebM, MOV, MKV…";
+      }
+    });
     ["dragenter", "dragover"].forEach((ev) => {
       elDropzone.addEventListener(ev, (e) => {
         e.preventDefault();
@@ -466,6 +563,20 @@
     });
   }
 
+  if (elThemeToggle) {
+    const stored = localStorage.getItem("codexvid_theme");
+    if (stored === "vivid") document.body.classList.add("theme-vivid");
+    elThemeToggle.addEventListener("click", () => {
+      document.body.classList.toggle("theme-vivid");
+      localStorage.setItem(
+        "codexvid_theme",
+        document.body.classList.contains("theme-vivid") ? "vivid" : "default"
+      );
+    });
+  }
+
+  bindPremiumInteractions();
+
   $("#btn-start-upload").addEventListener("click", async () => {
     elErrUpload.textContent = "";
     const yt = ($("#youtube-url") && $("#youtube-url").value.trim()) || "";
@@ -476,6 +587,7 @@
       return;
     }
 
+    processingState.expectedSec = estimateProcessingSeconds(yt, file);
     showScreen("processing");
     const fd = new FormData();
     if (yt) {
@@ -494,6 +606,10 @@
         throw new Error(data.error || res.statusText);
       }
       sessionId = data.session_id;
+      const actualSec = Math.max(1, Math.round((Date.now() - processingState.startedAt) / 1000));
+      const prev = Number(localStorage.getItem("codexvid_processing_avg_secs") || "0");
+      const next = prev > 0 ? Math.round(prev * 0.7 + actualSec * 0.3) : actualSec;
+      localStorage.setItem("codexvid_processing_avg_secs", String(next));
       clearSegmentContext();
       lastActiveIdx = -1;
       // Wipe per-segment cache — new video, new answers

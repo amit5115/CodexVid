@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,7 +14,9 @@ from app.config import (
     CODEXVID_AUDIO_OVERLAP_SEC,
     CODEXVID_FINE_SEG_MAX_SEC,
     CODEXVID_FINE_SEG_MIN_SEC,
+    CODEXVID_MAX_PARALLEL_WORKERS,
     CODEXVID_PARALLEL_WORKERS,
+    CODEXVID_WHISPER_BEAM_SIZE,
     CODEXVID_WHISPER_CHUNK_SEC,
     STT_PROVIDER,
 )
@@ -33,6 +36,15 @@ from app.services.transcription import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _adaptive_windowing(duration: float, chunk_sec: float, overlap_sec: float) -> tuple[float, float]:
+    """Increase window size for longer media to reduce ffmpeg/transcribe overhead."""
+    if duration >= 12 * 60:
+        return max(chunk_sec, 48.0), min(overlap_sec, 4.0)
+    if duration >= 8 * 60:
+        return max(chunk_sec, 40.0), min(overlap_sec, 4.0)
+    return chunk_sec, overlap_sec
 
 
 def extract_audio_wav(video_path: Path, out_wav: Path) -> None:
@@ -159,7 +171,7 @@ def _transcribe_window_words(
         str(chunk_path),
         language=lang,
         task=task,
-        beam_size=5,
+        beam_size=CODEXVID_WHISPER_BEAM_SIZE,
         vad_filter=True,
         word_timestamps=True,
     )
@@ -171,7 +183,7 @@ def _transcribe_window_words(
             str(chunk_path),
             language=lang if lang is not None else "en",
             task=task,
-            beam_size=5,
+            beam_size=CODEXVID_WHISPER_BEAM_SIZE,
             vad_filter=False,
             word_timestamps=True,
         )
@@ -192,12 +204,15 @@ def _transcribe_whisper_parallel_overlapping(
 ) -> list[dict]:
     """Overlapping windows + word dedupe + 2–5s fine segments + normalize."""
     duration = _get_audio_duration(wav_path)
+    chunk_sec, overlap_sec = _adaptive_windowing(duration, chunk_sec, overlap_sec)
+    workers_cap = max(1, min(max_workers, CODEXVID_MAX_PARALLEL_WORKERS, (os.cpu_count() or 1)))
+
     logger.info(
         "CodexVid Whisper: duration=%.1fs, chunk=%.1fs, overlap=%.1fs, workers=%d",
         duration,
         chunk_sec,
         overlap_sec,
-        max_workers,
+        workers_cap,
     )
 
     chunks, ov_tmp = _split_audio_overlapping(
@@ -223,7 +238,11 @@ def _transcribe_whisper_parallel_overlapping(
             model = _get_thread_whisper_model(model_size)
             lang, task, _ = _parse_language(language)
             segs_iter, _i = model.transcribe(
-                str(wav_path), language=lang, task=task, beam_size=5, vad_filter=True
+                str(wav_path),
+                language=lang,
+                task=task,
+                beam_size=CODEXVID_WHISPER_BEAM_SIZE,
+                vad_filter=True,
             )
             coarse = [
                 {
@@ -238,7 +257,7 @@ def _transcribe_whisper_parallel_overlapping(
 
         out_by_idx: dict[int, list[dict]] = {}
         n = len(chunks)
-        workers = max(1, min(max_workers, n))
+        workers = max(1, min(workers_cap, n))
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_idx = {
@@ -352,7 +371,7 @@ def transcribe_video(
                 str(wav_path),
                 language=lang,
                 task=task,
-                beam_size=5,
+                beam_size=CODEXVID_WHISPER_BEAM_SIZE,
                 vad_filter=False,
                 word_timestamps=True,
             )
@@ -370,7 +389,7 @@ def transcribe_video(
                     str(wav_path),
                     language=lang,
                     task=task,
-                    beam_size=5,
+                    beam_size=CODEXVID_WHISPER_BEAM_SIZE,
                     vad_filter=False,
                 )
                 raw = [
