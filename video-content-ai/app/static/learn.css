@@ -758,6 +758,13 @@ button.btn-primary:disabled {
   color: var(--text-tertiary);
 }
 
+.processing-eta {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  letter-spacing: 0.02em;
+}
+
 .processing-dots {
   display: flex;
   justify-content: center;
