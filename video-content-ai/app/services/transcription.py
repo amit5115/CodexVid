@@ -70,13 +70,10 @@ from dataclasses import dataclass
 # `Path` is a friendly way to handle file paths on any operating system;
 # like an address written in a standard format so Windows and Mac agree.
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    # Imported only for static typing; runtime import happens lazily in
-    # `_get_whisper_model` so modules that only use helpers (e.g. tests for
-    # language parsing) don't require `faster_whisper` installed.
-    from faster_whisper import WhisperModel
+# Faster-Whisper loads the AI "listener" model efficiently; WHO USES IT: this
+# file only — we create `WhisperModel` objects inside `_get_whisper_model`.
+from faster_whisper import WhisperModel
 
 # Numbers from app settings: max chunk length and when to start chunking;
 # like recipe amounts shared from the app's config cookbook.
@@ -95,21 +92,19 @@ logger = logging.getLogger(__name__)
 # In-memory cache: one loaded AI model per unique (size, device, number style);
 # like keeping one heavy dictionary on the desk instead of fetching a new copy
 # from the library every time someone asks for a translation.
-_whisper_cache: dict[str, Any] = {}
+_whisper_cache: dict[str, WhisperModel] = {}
 
 
 # Loads or reuses the AI "ears" (Whisper) for a given size/device; like borrowing
 # the same pair of headphones instead of buying new ones each song.
 # WHO CALLS THIS: `transcribe()` and `_transcribe_single()` only (this file).
-def _get_whisper_model(model_size: str, device: str = "cpu", compute_type: str = "int8") -> Any:
+def _get_whisper_model(model_size: str, device: str = "cpu", compute_type: str = "int8") -> WhisperModel:
     """Return a cached WhisperModel, loading it only on first use per config."""
     # Build a single text key so "small on CPU in int8" never collides with
     # "large on GPU in float16"; like a coat-check ticket combining three tags.
     key = f"{model_size}:{device}:{compute_type}"  # One string fingerprint for this hardware+model recipe.
     # First time we see this combo, load the model (slow); later times reuse it.
     if key not in _whisper_cache:
-        from faster_whisper import WhisperModel
-
         # Inform operators in logs; does not change behavior, only visibility.
         logger.info("Loading Whisper model: %s (device=%s, compute=%s)", model_size, device, compute_type)
         # Store in the dict so the next call is instant; like filling the cache.
