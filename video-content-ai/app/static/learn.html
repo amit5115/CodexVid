@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/learn.css?v=8"/>
+  <link rel="stylesheet" href="/static/learn.css?v=9"/>
 </head>
 <body>
   <div class="ambient" aria-hidden="true">
@@ -61,12 +61,17 @@
 
   <section id="screen-upload" class="screen screen-upload active">
     <div class="upload-shell">
-      <div class="upload-card">
+      <div class="upload-card interactive-surface">
         <div class="upload-card-glow"></div>
         <div class="upload-card-inner">
           <p class="upload-eyebrow"><span class="eyebrow-dot"></span> Video intelligence</p>
           <h2 class="upload-headline">Learn from any video</h2>
           <p class="upload-lead">Transcription, semantic search, and a structured lesson—chapters, takeaways, and quiz—so you can study and ask questions with timestamp-backed answers.</p>
+          <div class="premium-feature-grid">
+            <div class="premium-feature-card"><span>⚡</span><p>Instant chapter navigation</p></div>
+            <div class="premium-feature-card"><span>🧠</span><p>Smart AI lesson packs</p></div>
+            <div class="premium-feature-card"><span>💬</span><p>Contextual Q&A with jumps</p></div>
+          </div>
           <label class="field-label" for="youtube-url">YouTube link</label>
           <div class="input-glow-wrap">
             <input type="url" id="youtube-url" class="url-input" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off"/>
@@ -120,7 +125,7 @@
 
   <section id="screen-workspace" class="screen screen-workspace">
     <div class="workspace">
-      <div class="panel panel-video glass">
+      <div class="panel panel-video glass interactive-surface">
         <div class="panel-head">
           <span class="panel-head-icon" aria-hidden="true"></span>
           Video
@@ -129,7 +134,11 @@
           <video id="learnVideo" class="learn-video" controls playsinline></video>
         </div>
       </div>
-      <div class="panel panel-stack glass">
+      <div class="panel panel-stack glass interactive-surface">
+        <div class="workspace-pills">
+          <span class="workspace-pill">Premium workspace</span>
+          <span class="workspace-pill">Interactive timeline</span>
+        </div>
         <div class="tab-bar" id="teachTabs" role="tablist">
           <button type="button" data-tab="learn" class="active" role="tab" aria-selected="true">Lesson</button>
           <button type="button" data-tab="chat" role="tab" aria-selected="false">Chat</button>
@@ -159,6 +168,6 @@
 
 </main>
 
-<script src="/static/learn.js?v=8"></script>
+<script src="/static/learn.js?v=9"></script>
 </body>
 </html>
